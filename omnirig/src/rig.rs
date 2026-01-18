@@ -5,10 +5,10 @@ use std::sync::RwLock;
 use windows::core::{implement, BSTR};
 use windows::Win32::System::Com::{IDispatch, IDispatch_Impl, IDispatch_Vtbl};
 use windows::Win32::System::Variant::VARIANT;
-use windows_core::{interface, HRESULT};
+use windows_core::{interface, Interface, HRESULT};
 
 use crate::enums::{RigParamX, RigStatusX};
-use crate::port_bits::PortBits;
+use crate::port_bits::{IPortBits, PortBits};
 use auto_dispatch::auto_dispatch;
 
 #[interface("D30A7E51-5862-45B7-BFFA-6415917DA0CF")]
@@ -70,12 +70,12 @@ pub struct RigX {
     tx: RwLock<RigParamX>,
     mode: RwLock<RigParamX>,
     status: RwLock<RigStatusX>,
-    port_bits: RwLock<Option<IDispatch>>,
+    port_bits: RwLock<Option<IPortBits>>,
 }
 
 impl Default for RigX {
     fn default() -> Self {
-        let port_bits: IDispatch = PortBits::default().into();
+        let port_bits: IPortBits = PortBits::default().into();
 
         Self {
             rig_type: RwLock::new("DummyRig".to_string()),
@@ -362,14 +362,11 @@ impl RigX {
     #[id(0x17)]
     fn SendCustomCommand(
         &self,
-        command: VARIANT,
+        _command: VARIANT,
         reply_length: i32,
-        reply_end: VARIANT,
+        _reply_end: VARIANT,
     ) -> Result<(), HRESULT> {
-        println!(
-            "RigX::SendCustomCommand called with reply_length: {}",
-            reply_length
-        );
+        println!("RigX::SendCustomCommand called with reply_length: {reply_length}");
         Ok(())
     }
 
@@ -394,12 +391,14 @@ impl RigX {
     #[getter]
     fn PortBits(&self) -> Result<IDispatch, HRESULT> {
         println!("RigX::PortBits getter called");
-        self.port_bits
+        let port_bits = self
+            .port_bits
             .read()
             .unwrap()
             .as_ref()
             .cloned()
-            .ok_or(windows::Win32::Foundation::E_FAIL)
+            .ok_or(windows::Win32::Foundation::E_FAIL)?;
+        Ok(port_bits.cast()?)
     }
 }
 

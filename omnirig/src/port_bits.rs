@@ -21,7 +21,7 @@ pub unsafe trait IPortBits: IDispatch {
 }
 
 #[derive(Default)]
-#[implement(IDispatch)]
+#[implement(IPortBits)]
 pub struct PortBits {
     rts: RwLock<bool>,
     dtr: RwLock<bool>,
@@ -88,5 +88,79 @@ impl PortBits {
         println!("PortBits::Unlock() called");
         *self.locked.write().unwrap() = false;
         Ok(())
+    }
+}
+
+// Manual IPortBits_Impl implementation to bridge COM interface with auto_dispatch methods
+impl crate::port_bits::IPortBits_Impl for PortBits_Impl {
+    unsafe fn Lock(&self, ok: *mut bool) -> HRESULT {
+        match self.Lock() {
+            Ok(v) => {
+                *ok = v;
+                HRESULT(0)
+            }
+            Err(e) => e,
+        }
+    }
+
+    unsafe fn get_Rts(&self, value: *mut bool) -> HRESULT {
+        match self.get_Rts() {
+            Ok(v) => {
+                *value = v;
+                HRESULT(0)
+            }
+            Err(e) => e,
+        }
+    }
+
+    unsafe fn put_Rts(&self, value: bool) -> HRESULT {
+        match self.set_Rts(value) {
+            Ok(_) => HRESULT(0),
+            Err(e) => e,
+        }
+    }
+
+    unsafe fn get_Dtr(&self, value: *mut bool) -> HRESULT {
+        match self.get_Dtr() {
+            Ok(v) => {
+                *value = v;
+                HRESULT(0)
+            }
+            Err(e) => e,
+        }
+    }
+
+    unsafe fn put_Dtr(&self, value: bool) -> HRESULT {
+        match self.set_Dtr(value) {
+            Ok(_) => HRESULT(0),
+            Err(e) => e,
+        }
+    }
+
+    unsafe fn get_Cts(&self, value: *mut bool) -> HRESULT {
+        match self.get_Cts() {
+            Ok(v) => {
+                *value = v;
+                HRESULT(0)
+            }
+            Err(e) => e,
+        }
+    }
+
+    unsafe fn get_Dsr(&self, value: *mut bool) -> HRESULT {
+        match self.get_Dsr() {
+            Ok(v) => {
+                *value = v;
+                HRESULT(0)
+            }
+            Err(e) => e,
+        }
+    }
+
+    unsafe fn Unlock(&self) -> HRESULT {
+        match self.Unlock() {
+            Ok(_) => HRESULT(0),
+            Err(e) => e,
+        }
     }
 }
