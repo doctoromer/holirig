@@ -81,7 +81,7 @@ pub fn register_com_component(
     prog_id: &str,
     version: &str,
 ) -> Result<()> {
-    let clsid_path = format!("CLSID\\{{{:?}}}", clsid);
+    let clsid_path = format!("SOFTWARE\\Classes\\CLSID\\{{{:?}}}", clsid);
     println!("CLSID path: {clsid_path}");
     let clsid_key = RegKey::new(HKEY_CURRENT_USER, &clsid_path)?;
 
