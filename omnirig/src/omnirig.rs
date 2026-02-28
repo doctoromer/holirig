@@ -2,7 +2,7 @@
 #![allow(non_snake_case)]
 
 use std::ffi::c_void;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use windows::core::{implement, IUnknown, Interface, GUID};
 use windows::Win32::Foundation::{CLASS_E_NOAGGREGATION, E_NOINTERFACE};
 use windows::Win32::System::Com::{
@@ -10,6 +10,7 @@ use windows::Win32::System::Com::{
 };
 use windows_core::{interface, BOOL, HRESULT};
 
+use crate::provider::OmniRigProvider;
 use crate::rig::{IRigX, RigX};
 use auto_dispatch::auto_dispatch;
 
@@ -30,10 +31,10 @@ pub struct OmniRigX {
     rig2: RwLock<Option<IRigX>>,
 }
 
-impl Default for OmniRigX {
-    fn default() -> Self {
-        let rig1: IRigX = RigX::default().into();
-        let rig2: IRigX = RigX::default().into();
+impl OmniRigX {
+    pub fn from_provider(provider: &dyn OmniRigProvider) -> Self {
+        let rig1: IRigX = RigX::new(provider.create_rig1()).into();
+        let rig2: IRigX = RigX::new(provider.create_rig2()).into();
 
         Self {
             dialog_visible: RwLock::new(false),
@@ -136,7 +137,15 @@ impl IOmniRigX_Impl for OmniRigX_Impl {
 }
 
 #[implement(IClassFactory)]
-pub struct OmniRigXFactory;
+pub struct OmniRigXFactory {
+    provider: Arc<dyn OmniRigProvider>,
+}
+
+impl OmniRigXFactory {
+    pub fn new(provider: Arc<dyn OmniRigProvider>) -> Self {
+        Self { provider }
+    }
+}
 
 impl IClassFactory_Impl for OmniRigXFactory_Impl {
     fn CreateInstance(
@@ -158,7 +167,7 @@ impl IClassFactory_Impl for OmniRigXFactory_Impl {
             }
 
             println!("OmniRigXFactory: Creating new OmniRigX instance");
-            let instance: IOmniRigX = OmniRigX::default().into();
+            let instance: IOmniRigX = OmniRigX::from_provider(self.provider.as_ref()).into();
             *ppvobject = std::mem::transmute_copy(&instance);
             std::mem::forget(instance);
         }

@@ -14,22 +14,32 @@ use crate::omnirig::OmniRigXFactory;
 mod enums;
 mod omnirig;
 mod port_bits;
+pub mod provider;
 mod registry;
 mod rig;
 
+pub use enums::{RigParamX, RigStatusX};
+pub use provider::{
+    DummyPortBits, DummyProvider, DummyRig, OmniRigProvider, PortBitsControl, RigControl,
+};
+
 const CLSID_OMNIRIG: GUID = GUID::from_u128(0x0839E8C6_ED30_4950_8087_966F970F0CAE);
 
-pub fn run_omnirig_server() -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_omnirig_server(
+    provider: impl OmniRigProvider,
+) -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = std::env::current_exe()?;
     let exe_path_str = exe_path.to_str().ok_or("Invalid executable path")?;
 
     println!("\nRegistering HolyRig COM component...");
     registry::register_com_component(&CLSID_OMNIRIG, exe_path_str, "OmniRig.OmniRigX", "1.0")?;
 
+    let provider = Arc::new(provider);
+
     unsafe {
         CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
 
-        let factory: IClassFactory = OmniRigXFactory.into();
+        let factory: IClassFactory = OmniRigXFactory::new(provider).into();
 
         let cookie = CoRegisterClassObject(
             &CLSID_OMNIRIG,

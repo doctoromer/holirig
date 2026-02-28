@@ -1,12 +1,13 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
-use std::sync::RwLock;
 use windows::core::implement;
 use windows::Win32::System::Com::{IDispatch, IDispatch_Impl, IDispatch_Vtbl};
 use windows_core::{interface, HRESULT};
 
 use auto_dispatch::auto_dispatch;
+
+use crate::provider::PortBitsControl;
 
 #[interface("3DEE2CC8-1EA3-46E7-B8B4-3E7321F2446A")]
 pub unsafe trait IPortBits: IDispatch {
@@ -20,14 +21,15 @@ pub unsafe trait IPortBits: IDispatch {
     fn Unlock(&self) -> HRESULT;
 }
 
-#[derive(Default)]
 #[implement(IPortBits)]
 pub struct PortBits {
-    rts: RwLock<bool>,
-    dtr: RwLock<bool>,
-    cts: RwLock<bool>,
-    dsr: RwLock<bool>,
-    locked: RwLock<bool>,
+    inner: Box<dyn PortBitsControl>,
+}
+
+impl PortBits {
+    pub fn new(inner: Box<dyn PortBitsControl>) -> Self {
+        Self { inner }
+    }
 }
 
 #[auto_dispatch]
@@ -35,22 +37,21 @@ impl PortBits {
     #[id(0x01)]
     fn Lock(&self) -> Result<bool, HRESULT> {
         println!("PortBits::Lock() called");
-        *self.locked.write().unwrap() = true;
-        Ok(true)
+        Ok(self.inner.lock())
     }
 
     #[id(0x02)]
     #[getter]
     fn Rts(&self) -> Result<bool, HRESULT> {
         println!("PortBits::Rts getter called");
-        Ok(*self.rts.read().unwrap())
+        Ok(self.inner.rts())
     }
 
     #[id(0x02)]
     #[setter]
     fn Rts(&self, value: bool) -> Result<(), HRESULT> {
         println!("PortBits::Rts setter called with value: {}", value);
-        *self.rts.write().unwrap() = value;
+        self.inner.set_rts(value);
         Ok(())
     }
 
@@ -58,14 +59,14 @@ impl PortBits {
     #[getter]
     fn Dtr(&self) -> Result<bool, HRESULT> {
         println!("PortBits::Dtr getter called");
-        Ok(*self.dtr.read().unwrap())
+        Ok(self.inner.dtr())
     }
 
     #[id(0x03)]
     #[setter]
     fn Dtr(&self, value: bool) -> Result<(), HRESULT> {
         println!("PortBits::Dtr setter called with value: {}", value);
-        *self.dtr.write().unwrap() = value;
+        self.inner.set_dtr(value);
         Ok(())
     }
 
@@ -73,20 +74,20 @@ impl PortBits {
     #[getter]
     fn Cts(&self) -> Result<bool, HRESULT> {
         println!("PortBits::Cts getter called");
-        Ok(*self.cts.read().unwrap())
+        Ok(self.inner.cts())
     }
 
     #[id(0x05)]
     #[getter]
     fn Dsr(&self) -> Result<bool, HRESULT> {
         println!("PortBits::Dsr getter called");
-        Ok(*self.dsr.read().unwrap())
+        Ok(self.inner.dsr())
     }
 
     #[id(0x06)]
     fn Unlock(&self) -> Result<(), HRESULT> {
         println!("PortBits::Unlock() called");
-        *self.locked.write().unwrap() = false;
+        self.inner.unlock();
         Ok(())
     }
 }
