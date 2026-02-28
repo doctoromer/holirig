@@ -79,9 +79,10 @@ impl Default for RigX {
 
         Self {
             rig_type: RwLock::new("DummyRig".to_string()),
-            status_str: RwLock::new("Not configured".to_string()),
-            readable_params: RwLock::new(0),
-            writeable_params: RwLock::new(0),
+            status_str: RwLock::new("online".to_string()),
+            // All params are readable and writeable
+            readable_params: RwLock::new(0xFFFFFFFFu32 as i32),
+            writeable_params: RwLock::new(0xFFFFFFFFu32 as i32),
             freq: RwLock::new(0),
             freq_a: RwLock::new(0),
             freq_b: RwLock::new(0),
@@ -93,7 +94,7 @@ impl Default for RigX {
             xit: RwLock::new(RigParamX::default()),
             tx: RwLock::new(RigParamX::default()),
             mode: RwLock::new(RigParamX::default()),
-            status: RwLock::new(RigStatusX::default()),
+            status: RwLock::new(RigStatusX::Online),
             port_bits: RwLock::new(Some(port_bits)),
         }
     }
