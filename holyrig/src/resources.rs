@@ -21,13 +21,24 @@ impl Resources {
         context: C,
         load_fn: F,
     ) -> Result<HashMap<String, T>> {
-        let schema_dir = if cfg!(debug_assertions) {
-            PathBuf::from("..")
+        let base_dir = if cfg!(debug_assertions) {
+            let mut candidate = std::env::current_dir()?;
+            loop {
+                if candidate.join(dir).exists() {
+                    break candidate;
+                }
+                if !candidate.pop() {
+                    anyhow::bail!(
+                        "Could not find '{}' in any ancestor of the current directory",
+                        dir
+                    );
+                }
+            }
         } else {
             dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?
         };
 
-        schema_dir
+        base_dir
             .join(dir)
             .read_dir()?
             .filter_map(|entry| {
