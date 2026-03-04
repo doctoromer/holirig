@@ -31,7 +31,7 @@ schema Transceiver {
     fn transmit(bool tx);
     fn set_mode(Mode mode);
 
-    // fn rit_offset(int offset);
+    fn rit_offset(int offset);
 
     status {
         Mode mode;
@@ -40,7 +40,8 @@ schema Transceiver {
         Vfo vfo;
         int cw_pitch;
         bool transmit;
-        // bool split;
+        bool split;
+        int rit_offset;
         bool rit;
         bool xit;
     }

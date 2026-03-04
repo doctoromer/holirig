@@ -124,6 +124,10 @@ impl Transceiver for IC7300 {
         read("FEFE94E01C00FD.FEFEE094.1C00.{transmit:1}.FD");
         set_var(s"transmit", transmit as bool);
 
+        write("FEFE94E0.0F.FD");
+        read("FEFE94E00FFD.FEFEE094.0F.{split:1}.FD");
+        set_var(s"split", split as bool);
+
         write("FEFE94E0.2101.FD");
         read("FEFE94E02101FD.FEFEE094.2101.{rit:1}.FD");
         set_var(s"rit", rit as bool);
@@ -132,6 +136,6 @@ impl Transceiver for IC7300 {
         read("FEFE94E02102FD.FEFEE094.2102.{xit:1}.FD");
         set_var(s"xit", xit as bool);
 
-        // Missing duplicated status 6 and 7 from the original file
+        // rit_offset: not supported on IC-7300
     }
 }
