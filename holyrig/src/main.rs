@@ -23,6 +23,18 @@ async fn main() -> Result<()> {
     let udp_message_receiver = device_manager.receiver();
     let rigctld_message_receiver = device_manager.receiver();
 
+    #[cfg(windows)]
+    let _omnirig_handle = {
+        use holyrig::interfaces::omnirig_provider::HolyRigProvider;
+        let provider = HolyRigProvider::new(
+            device_manager.sender(),
+            device_manager.receiver(),
+            tokio::runtime::Handle::current(),
+        );
+        omnirig::spawn_omnirig_server(provider)
+            .expect("Failed to start OmniRig COM server")
+    };
+
     let jsonrpc_command_sender = device_manager.sender();
     let jsonrpc_command_receiver = device_manager.receiver();
     let jsonrpc_server = JsonRpcServer::new(
