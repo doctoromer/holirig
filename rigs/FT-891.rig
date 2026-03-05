@@ -20,7 +20,7 @@ impl Transceiver for FT891 {
     }
 
     init {
-        write("41.49.30.3B");
+        write(s"AI0;");
     }
 
     fn set_freq(int freq, Vfo target) {
@@ -32,7 +32,7 @@ impl Transceiver for FT891 {
     }
 
     fn clear_rit() {
-        write("52.43.3B");
+        write(s"RC;");
     }
 
     fn cw_pitch(int pitch) {
@@ -42,18 +42,18 @@ impl Transceiver for FT891 {
 
     fn set_split(bool split) {
         if split {
-            write("53.54.31.3B");
+            write(s"ST1;");
         } else {
-            write("53.54.30.3B");
+            write(s"ST0;");
         }
     }
 
     fn vfo_equal() {
-        write("41.42.3B");
+        write(s"AB;");
     }
 
     fn vfo_swap() {
-        write("53.56.3B");
+        write(s"SV;");
     }
 
     fn set_vfo(Vfo rx, Vfo tx) {
@@ -62,9 +62,9 @@ impl Transceiver for FT891 {
 
     fn set_rit(bool rit) {
         if rit {
-            write("43.46.30.31.30.3B");
+            write(s"CF010;");
         } else {
-            write("43.46.30.30.30.3B");
+            write(s"CF000;");
         }
     }
 
@@ -78,28 +78,28 @@ impl Transceiver for FT891 {
 
     fn transmit(bool tx) {
         if tx {
-            write("54.58.31.3B");
+            write(s"TX1;");
         } else {
-            write("54.58.30.3B");
+            write(s"TX0;");
         }
     }
 
     fn set_mode(Mode mode) {
         if mode == Mode::CWU {
-            write("45.58.30.37.30.37.30.3B.4D.44.30.33.3B");
+            write(s"EX07070;MD03;");
         } else if mode == Mode::CWL {
-            write("45.58.30.37.30.37.31.3B.4D.44.30.37.3B");
+            write(s"EX07071;MD07;");
         } else if mode == Mode::DIGIU {
-            write("45.58.30.38.31.32.30.3B.4D.44.30.38.3B");
+            write(s"EX08120;MD08;");
         } else if mode == Mode::DIGIL {
-            write("45.58.31.30.31.31.31.3B.4D.44.30.36.3B");
+            write(s"EX10111;MD06;");
         } else {
             write("4D.44.30.{mode:text:1}.3B");
         }
     }
 
     status {
-        write("49.46.3B");
+        write(s"IF;");
         read("49.46.{_:3}.{freq_a:text:9}.{_:5}.{rit_flag:text:1}.{xit_flag:text:1}.{mode_val:text:1}.{_:4}.3B");
         set_var(s"freq_a", freq_a);
         set_var(s"rit", rit_flag as bool);
@@ -108,27 +108,26 @@ impl Transceiver for FT891 {
         if mode_val <= 8 {
             set_var(s"mode", mode_val as Mode);
         } else if mode_val == 9 {
-            // DATA-FM mapped to DIGIU per OmniRig definition
             set_var(s"mode", 8 as Mode);
         }
 
-        write("46.42.3B");
+        write(s"FB;");
         read("46.42.{freq_b:text:9}.3B");
         set_var(s"freq_b", freq_b);
 
-        write("4B.50.3B");
+        write(s"KP;");
         read("4B.50.{pitch:text:2}.3B");
         set_var(s"cw_pitch", (pitch * 10) + 300);
 
-        write("53.54.3B");
+        write(s"ST;");
         read("53.54.{split_val:text:1}.3B");
         set_var(s"split", split_val as bool);
 
-        write("54.58.3B");
+        write(s"TX;");
         read("54.58.{tx_val:text:1}.3B");
         set_var(s"transmit", tx_val as bool);
 
         // TODO: rit_offset: available in the IF response at positions 14-18 (sign + 4 digits)
-        // but the leading '+' character for positive offsets is not supported by the text decoder.
+        // but the leading '+' character for positive offsets is not yet supported
     }
 }
