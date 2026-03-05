@@ -222,38 +222,81 @@ impl DeviceManager {
         Ok(())
     }
 
-    async fn handle_device_message(&mut self, device_message: DeviceMessage) {
-        let result = match device_message {
+    fn handle_device_message(&mut self, device_message: DeviceMessage) {
+        match device_message {
             DeviceMessage::Connected { device_id } => {
-                let init_result = self.initialize_device(device_id).await;
+                let Some(device) = self.devices.get(&device_id).cloned() else {
+                    eprintln!("[manager] Unknown device {device_id} connected");
+                    return;
+                };
+                let rig_model = device.settings.rig_type.clone();
+                let poll_interval = device.settings.poll_interval;
+                let manager_tx = self.manager_message_tx.clone();
 
-                let rig_model = self.devices[&device_id].settings.rig_type.clone();
+                println!("[manager] Device {device_id} ({rig_model}) connected, initializing...");
 
-                let _ = self
-                    .manager_message_tx
-                    .send(ManagerMessage::DeviceConnected {
+                tokio::spawn(async move {
+                    let external_api = DeviceExternalApi::new(device.command_tx.clone());
+                    let init_result = device.rig_wrapper.execute_init(&external_api).await;
+
+                    if let Err(ref err) = init_result {
+                        eprintln!("[manager] Device {device_id} initialization failed: {err}");
+                    } else {
+                        println!("[manager] Device {device_id} initialized");
+                    }
+
+                    let _ = manager_tx.send(ManagerMessage::DeviceConnected {
                         device_id,
                         rig_model,
                     });
 
-                if init_result.is_ok() {
-                    self.start_status_polling(device_id).await
-                } else {
-                    init_result
-                }
+                    if init_result.is_err() {
+                        return;
+                    }
+
+                    let mut previous_values = HashMap::new();
+                    loop {
+                        sleep(Duration::from_millis(poll_interval as u64)).await;
+
+                        let values =
+                            match DeviceManager::execute_status_commands(&device).await {
+                                Ok(v) => v,
+                                Err(err) => {
+                                    eprintln!("[manager] Status polling for device {device_id} failed: {err}");
+                                    break;
+                                }
+                            };
+
+                        let changed_values: HashMap<String, Value> = values
+                            .iter()
+                            .filter(|(name, value)| {
+                                previous_values
+                                    .get(*name)
+                                    .map(|prev_value| prev_value != *value)
+                                    .unwrap_or(true)
+                            })
+                            .map(|(name, value)| (name.clone(), value.clone()))
+                            .collect();
+
+                        if !changed_values.is_empty() {
+                            let _ = manager_tx.send(ManagerMessage::StatusUpdate {
+                                device_id,
+                                values: changed_values,
+                            });
+                        }
+                        previous_values = values;
+                    }
+                });
             }
             DeviceMessage::Disconnected { device_id } => {
+                println!("[manager] Device {device_id} disconnected");
                 let _ = self
                     .manager_message_tx
                     .send(ManagerMessage::DeviceDisconnected { device_id });
-                Ok(())
             }
             DeviceMessage::Error { device_id, error } => {
-                Err(anyhow!("Device (id: {device_id}) failed: {error}"))
+                eprintln!("[manager] Device (id: {device_id}) failed: {error}");
             }
-        };
-        if let Err(err) = result {
-            eprintln!("{err}");
         }
     }
 
@@ -286,17 +329,36 @@ impl DeviceManager {
                 params,
                 response_channel,
             } => {
-                let result = self.execute_command(device_id, &command_name, params).await;
+                if let Some(device) = self.devices.get(&device_id).cloned() {
+                    println!("[manager] Executing command '{command_name}' on device {device_id} with params {params:?}");
+                    tokio::spawn(async move {
+                        let external_api = DeviceExternalApi::new(device.command_tx.clone());
+                        let result = device
+                            .rig_wrapper
+                            .execute_command(&command_name, params, &external_api)
+                            .await;
 
-                let response = match result {
-                    Ok(response) => CommandResponse::Success(response),
-                    Err(err) => {
-                        eprintln!("Command {command_name} of device {device_id} failed: {err}");
-                        CommandResponse::Error(err.to_string())
+                        let response = match result {
+                            Ok(values) => {
+                                println!("[manager] Command '{command_name}' on device {device_id} succeeded: {values:?}");
+                                CommandResponse::Success(values)
+                            }
+                            Err(err) => {
+                                eprintln!("[manager] Command '{command_name}' on device {device_id} failed: {err}");
+                                CommandResponse::Error(err.to_string())
+                            }
+                        };
+                        if let Some(tx) = response_channel {
+                            let _ = tx.send(response);
+                        }
+                    });
+                } else {
+                    eprintln!("[manager] Device not found: {device_id}");
+                    if let Some(tx) = response_channel {
+                        let _ = tx.send(CommandResponse::Error(format!(
+                            "Device not found: {device_id}"
+                        )));
                     }
-                };
-                if let Some(response_channel) = response_channel {
-                    response_channel.send(response).unwrap();
                 }
             }
             ManagerCommand::RemoveDevice { device_id } => {
@@ -326,7 +388,7 @@ impl DeviceManager {
         loop {
             tokio::select! {
                 Some(device_message) = self.device_rx.recv() => {
-                    self.handle_device_message(device_message).await;
+                    self.handle_device_message(device_message);
                 },
                 Some(manager_command) = self.manager_command_rx.recv() => {
                     self.handle_manager_command(manager_command).await?
@@ -342,46 +404,6 @@ impl DeviceManager {
         Ok(external_api.get_status_values())
     }
 
-    async fn start_status_polling(&self, device_id: usize) -> Result<()> {
-        let device = self
-            .devices
-            .get(&device_id)
-            .ok_or_else(|| anyhow!("Device not found: {}", device_id))?;
-
-        let poll_interval = device.settings.poll_interval;
-        let manager_tx = self.manager_message_tx.clone();
-        let device_clone = device.clone();
-
-        tokio::spawn(async move {
-            let mut previous_values = HashMap::new();
-            loop {
-                sleep(Duration::from_millis(poll_interval as u64)).await;
-
-                let values = Self::execute_status_commands(&device_clone).await.unwrap();
-                let changed_values: HashMap<String, Value> = values
-                    .iter()
-                    .filter(|(name, value)| {
-                        previous_values
-                            .get(*name)
-                            .map(|prev_value| prev_value != *value)
-                            .unwrap_or(true)
-                    })
-                    .map(|(name, value)| (name.clone(), value.clone()))
-                    .collect();
-
-                if !changed_values.is_empty() {
-                    let _ = manager_tx.send(ManagerMessage::StatusUpdate {
-                        device_id,
-                        values: changed_values,
-                    });
-                }
-                previous_values = values;
-            }
-        });
-
-        Ok(())
-    }
-
     pub async fn add_device(&mut self, device_id: usize, settings: RigSettings) -> Result<()> {
         let rig_wrapper = self
             .resources
@@ -389,6 +411,7 @@ impl DeviceManager {
             .get(&settings.rig_type)
             .context("Unknown rig type")?
             .clone();
+        println!("[manager] Opening device {device_id} ({}) on {}", settings.rig_type, settings.port);
         let (serial_device, command_rx) =
             SerialDevice::new(device_id, settings.clone(), self.device_tx.clone()).await?;
 
@@ -429,37 +452,4 @@ impl DeviceManager {
         Ok(())
     }
 
-    async fn _remove_device(&mut self, device_id: usize) {
-        if let Some(device) = self.devices.remove(&device_id) {
-            let _ = device.command_tx.send(DeviceCommand::Shutdown).await;
-        }
-    }
-
-    async fn execute_command(
-        &self,
-        device_id: usize,
-        command_name: &str,
-        params: HashMap<String, String>,
-    ) -> Result<HashMap<String, Value>> {
-        let device = self
-            .devices
-            .get(&device_id)
-            .ok_or_else(|| anyhow!("Device not found: {}", device_id))?;
-
-        let external_api = DeviceExternalApi::new(device.command_tx.clone());
-        device
-            .rig_wrapper
-            .execute_command(command_name, params, &external_api)
-            .await
-    }
-
-    pub async fn initialize_device(&self, device_id: usize) -> Result<()> {
-        let device = self
-            .devices
-            .get(&device_id)
-            .ok_or_else(|| anyhow!("Device not found: {device_id}"))?;
-
-        let external_api = DeviceExternalApi::new(device.command_tx.clone());
-        device.rig_wrapper.execute_init(&external_api).await
-    }
 }

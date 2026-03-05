@@ -85,10 +85,12 @@ impl SerialDevice {
     }
 
     async fn attempt_reconnect(&mut self) -> Result<()> {
+        println!("[device {}] Disconnected, attempting to reconnect on {}...", self.id, self.settings.port);
         loop {
             sleep(Duration::from_millis(self.settings.poll_interval as u64)).await;
             if let Ok(new_port) = Self::open_port(&self.settings) {
                 self.port = new_port;
+                println!("[device {}] Reconnected on {}", self.id, self.settings.port);
                 self.device_tx
                     .send(DeviceMessage::Connected { device_id: self.id })
                     .await
@@ -99,6 +101,7 @@ impl SerialDevice {
     }
 
     async fn write_only(&mut self, data: &[u8]) -> Result<()> {
+        println!("[device {}] TX: {}", self.id, data.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" "));
         self.port.write_all(data).await?;
         Ok(())
     }
@@ -106,6 +109,7 @@ impl SerialDevice {
     async fn read_exact(&mut self, length: usize) -> Result<Vec<u8>> {
         let mut buf = vec![0u8; length];
         self.port.read_exact(&mut buf).await?;
+        println!("[device {}] RX: {}", self.id, buf.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" "));
         Ok(buf)
     }
 
