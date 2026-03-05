@@ -100,7 +100,7 @@ impl Transceiver for FT891 {
 
     status {
         write(s"IF;");
-        read("49.46.{_:3}.{freq_a:text:9}.{_:5}.{rit_flag:text:1}.{xit_flag:text:1}.{mode_val:text:1}.{_:4}.3B");
+        read("49.46.{_:3}.{freq_a:text:9}.{_:5}.{rit_flag:text:1}.{xit_flag:text:1}.{mode_val:text:1}.{_:5}.3B");
         set_var(s"freq_a", freq_a);
         set_var(s"rit", rit_flag as bool);
         set_var(s"xit", xit_flag as bool);
