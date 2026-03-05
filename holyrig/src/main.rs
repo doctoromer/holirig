@@ -1,7 +1,7 @@
 use anyhow::Result;
 use eframe::egui;
 use holyrig::interfaces::jsonrpc::JsonRpcServer;
-use holyrig::resources::Resources;
+use holyrig::resources::{ResourceError, Resources};
 use tokio::sync::mpsc;
 
 use holyrig::interfaces::{rigctld, udp_server};
@@ -12,7 +12,25 @@ use serial::manager::DeviceManager;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let resources = Resources::load()?;
+    let resources = match Resources::load() {
+        Ok(resources) => resources,
+        Err(err) => {
+            match err {
+                ResourceError::Schema(parse_error) => {
+                    eprintln!("{parse_error}");
+                }
+                ResourceError::Rig(parse_errors) => {
+                    for err in parse_errors {
+                        eprintln!("{err}");
+                    }
+                }
+                err => {
+                    eprintln!("{err}")
+                }
+            }
+            return Ok(());
+        }
+    };
 
     let (gui_sender, gui_receiver) = mpsc::channel::<GuiMessage>(10);
     let mut device_manager: DeviceManager = DeviceManager::new(resources.clone());

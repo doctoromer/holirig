@@ -1,6 +1,6 @@
 mod interpreter;
 mod parser;
-mod parser_errors;
+pub mod parser_errors;
 mod schema_parser;
 mod semantic_analyzer;
 
