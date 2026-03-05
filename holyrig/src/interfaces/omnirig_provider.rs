@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use omnirig::{
-    DummyPortBits, OmniRigProvider, PortBitsControl, RigControl, RigParamX, RigStatusX,
-};
+use omnirig::{DummyPortBits, OmniRigProvider, PortBitsControl, RigControl, RigParamX, RigStatusX};
 use parking_lot::RwLock;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::Sender;
@@ -104,7 +102,10 @@ impl HolyRigProvider {
         self.tokio_runtime.spawn(async move {
             loop {
                 match receiver.recv().await {
-                    Ok(ManagerMessage::StatusUpdate { device_id: id, values }) if id == device_id => {
+                    Ok(ManagerMessage::StatusUpdate {
+                        device_id: id,
+                        values,
+                    }) if id == device_id => {
                         let mut s = status_clone.write();
                         for (name, value) in values {
                             match (name.as_str(), &value) {
@@ -122,7 +123,9 @@ impl HolyRigProvider {
                             }
                         }
                     }
-                    Ok(ManagerMessage::DeviceConnected { device_id: id, .. }) if id == device_id => {
+                    Ok(ManagerMessage::DeviceConnected { device_id: id, .. })
+                        if id == device_id =>
+                    {
                         status_clone.write().connected = true;
                     }
                     Ok(ManagerMessage::DeviceDisconnected { device_id: id }) if id == device_id => {

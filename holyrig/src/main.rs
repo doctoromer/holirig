@@ -31,8 +31,7 @@ async fn main() -> Result<()> {
             device_manager.receiver(),
             tokio::runtime::Handle::current(),
         );
-        omnirig::spawn_omnirig_server(provider)
-            .expect("Failed to start OmniRig COM server")
+        omnirig::spawn_omnirig_server(provider).expect("Failed to start OmniRig COM server")
     };
 
     let jsonrpc_command_sender = device_manager.sender();
@@ -47,14 +46,11 @@ async fn main() -> Result<()> {
 
     tokio::spawn(async move { jsonrpc_server.run().await });
 
-    let port_gui_sender = gui_sender.clone();
-
+    let device_gui_sender = gui_sender.clone();
     tokio::spawn(async move {
-        let result = device_manager.run(gui_sender).await;
+        let result = device_manager.run(device_gui_sender).await;
         println!("Manager exited with: {result:?}");
     });
-
-    tokio::spawn(async move { serial::port_enumerator::run(port_gui_sender).await });
 
     tokio::spawn(async move {
         if let Err(err) = udp_server::run_server(udp_command_sender, udp_message_receiver).await {
@@ -70,9 +66,12 @@ async fn main() -> Result<()> {
         }
     });
 
+    let port_gui_sender = gui_sender.clone();
+    tokio::spawn(async move { serial::port_enumerator::run(port_gui_sender).await });
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([350.0, 440.0])
+            .with_inner_size([450.0, 440.0])
             .with_resizable(false),
         ..Default::default()
     };

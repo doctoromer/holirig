@@ -26,7 +26,11 @@ pub async fn run(gui_sender: mpsc::Sender<GuiMessage>) {
             })
             .collect();
 
-        if gui_sender.send(GuiMessage::AvailablePorts(ports)).await.is_err() {
+        if gui_sender
+            .send(GuiMessage::AvailablePorts(ports))
+            .await
+            .is_err()
+        {
             break;
         }
 

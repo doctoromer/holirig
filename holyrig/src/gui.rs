@@ -87,11 +87,14 @@ impl TabViewer for AppTabViewer {
                     .selected_text(if rig.port.is_empty() {
                         "Select port...".to_string()
                     } else {
-                        self.available_ports
+                        let mut display_name = self
+                            .available_ports
                             .iter()
                             .find(|p| p.port_name == rig.port)
                             .map(|p| p.display_name.clone())
-                            .unwrap_or_else(|| rig.port.clone())
+                            .unwrap_or_else(|| rig.port.clone());
+                        display_name.truncate(30);
+                        display_name
                     })
                     .show_ui(ui, |ui| {
                         for entry in &self.available_ports {
