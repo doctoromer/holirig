@@ -256,7 +256,7 @@ impl App {
     ) -> Self {
         App {
             gui_receiver,
-            tabs: AppTabs::new(serial_sender.clone(), rig_types),
+            tabs: AppTabs::new(serial_sender, rig_types),
         }
     }
 }
