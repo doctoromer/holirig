@@ -1,0 +1,134 @@
+version = 1;
+
+impl Transceiver for FT891 {
+    enum Vfo {
+        A = 0,
+        B = 1,
+        // Dummy value
+        Unknown = 0xFF,
+    }
+
+    enum Mode {
+        LSB = 1,
+        USB = 2,
+        CWU = 3,
+        FM = 4,
+        AM = 5,
+        DIGIL = 6,
+        CWL = 7,
+        DIGIU = 8,
+    }
+
+    init {
+        write("41.49.30.3B");
+    }
+
+    fn set_freq(int freq, Vfo target) {
+        if target == Vfo::A {
+            write("46.41.{freq:text:9}.3B");
+        } else if target == Vfo::B {
+            write("46.42.{freq:text:9}.3B");
+        }
+    }
+
+    fn clear_rit() {
+        write("52.43.3B");
+    }
+
+    fn cw_pitch(int pitch) {
+        pitch = ((pitch - 300) * 0.1) as int;
+        write("4B.50.{pitch:text:2}.3B");
+    }
+
+    fn set_split(bool split) {
+        if split {
+            write("53.54.31.3B");
+        } else {
+            write("53.54.30.3B");
+        }
+    }
+
+    fn vfo_equal() {
+        write("41.42.3B");
+    }
+
+    fn vfo_swap() {
+        write("53.56.3B");
+    }
+
+    fn set_vfo(Vfo rx, Vfo tx) {
+        error(s"FT-891 does not support direct VFO selection");
+    }
+
+    fn set_rit(bool rit) {
+        if rit {
+            write("43.46.30.31.30.3B");
+        } else {
+            write("43.46.30.30.30.3B");
+        }
+    }
+
+    fn set_xit(bool xit) {
+        error(s"XIT is not supported on FT-891");
+    }
+
+    fn rit_offset(int offset) {
+        write("52.55.{offset:text:4}.3B");
+    }
+
+    fn transmit(bool tx) {
+        if tx {
+            write("54.58.31.3B");
+        } else {
+            write("54.58.30.3B");
+        }
+    }
+
+    fn set_mode(Mode mode) {
+        if mode == Mode::CWU {
+            write("45.58.30.37.30.37.30.3B.4D.44.30.33.3B");
+        } else if mode == Mode::CWL {
+            write("45.58.30.37.30.37.31.3B.4D.44.30.37.3B");
+        } else if mode == Mode::DIGIU {
+            write("45.58.30.38.31.32.30.3B.4D.44.30.38.3B");
+        } else if mode == Mode::DIGIL {
+            write("45.58.31.30.31.31.31.3B.4D.44.30.36.3B");
+        } else {
+            write("4D.44.30.{mode:text:1}.3B");
+        }
+    }
+
+    status {
+        write("49.46.3B");
+        read("49.46.{_:3}.{freq_a:text:9}.{_:5}.{rit_flag:text:1}.{xit_flag:text:1}.{mode_val:text:1}.{_:4}.3B");
+        set_var(s"freq_a", freq_a);
+        set_var(s"rit", rit_flag as bool);
+        set_var(s"xit", xit_flag as bool);
+
+        if mode_val <= 8 {
+            set_var(s"mode", mode_val as Mode);
+        } else if mode_val == 9 {
+            // DATA-FM mapped to DIGIU per OmniRig definition
+            set_var(s"mode", 8 as Mode);
+        }
+
+        write("46.42.3B");
+        read("46.42.{freq_b:text:9}.3B");
+        set_var(s"freq_b", freq_b);
+
+        write("4B.50.3B");
+        read("4B.50.{pitch:text:2}.3B");
+        set_var(s"cw_pitch", (pitch * 10) + 300);
+
+        write("53.54.3B");
+        read("53.54.{split_val:text:1}.3B");
+        set_var(s"split", split_val as bool);
+
+        write("54.58.3B");
+        read("54.58.{tx_val:text:1}.3B");
+        set_var(s"transmit", tx_val as bool);
+
+        // TODO: rit_offset: available in the IF response at positions 14-18 (sign + 4 digits)
+        // but the leading '+' character for positive offsets is not supported by the text decoder.
+    }
+}
