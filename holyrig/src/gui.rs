@@ -10,14 +10,22 @@ use egui_dock::{
 };
 use tokio::sync::mpsc::{Receiver, Sender};
 
+#[derive(Debug, Clone)]
+pub struct SerialPortEntry {
+    pub port_name: String,
+    pub display_name: String,
+}
+
 pub enum GuiMessage {
     InitialState(Vec<RigSettings>),
+    AvailablePorts(Vec<SerialPortEntry>),
 }
 
 struct AppTabViewer {
     current_index: usize,
     add_tab_request: bool,
     rig_types: Vec<String>,
+    available_ports: Vec<SerialPortEntry>,
     sender: Sender<ManagerCommand>,
     error_message: Option<String>,
     active_tab_id: Option<usize>,
@@ -27,12 +35,14 @@ impl AppTabViewer {
     fn new(
         sender: Sender<ManagerCommand>,
         rig_types: Vec<String>,
+        available_ports: Vec<SerialPortEntry>,
         active_tab_id: Option<usize>,
     ) -> Self {
         AppTabViewer {
             current_index: 0,
             add_tab_request: false,
             rig_types,
+            available_ports,
             sender,
             error_message: None,
             active_tab_id,
@@ -73,7 +83,25 @@ impl TabViewer for AppTabViewer {
                 ui.end_row();
 
                 ui.label("Port:");
-                ui.text_edit_singleline(&mut rig.port);
+                ComboBox::from_id_salt("port")
+                    .selected_text(if rig.port.is_empty() {
+                        "Select port...".to_string()
+                    } else {
+                        self.available_ports
+                            .iter()
+                            .find(|p| p.port_name == rig.port)
+                            .map(|p| p.display_name.clone())
+                            .unwrap_or_else(|| rig.port.clone())
+                    })
+                    .show_ui(ui, |ui| {
+                        for entry in &self.available_ports {
+                            ui.selectable_value(
+                                &mut rig.port,
+                                entry.port_name.clone(),
+                                &entry.display_name,
+                            );
+                        }
+                    });
                 ui.end_row();
 
                 ui.label("Baud Rate:");
@@ -182,6 +210,7 @@ impl TabViewer for AppTabViewer {
 struct AppTabs {
     dock_state: DockState<RigSettings>,
     rig_types: Vec<String>,
+    available_ports: Vec<SerialPortEntry>,
     sender: Sender<ManagerCommand>,
     current_device_id: usize,
 }
@@ -192,6 +221,7 @@ impl AppTabs {
         Self {
             dock_state,
             rig_types,
+            available_ports: Vec::new(),
             sender,
             current_device_id: 0,
         }
@@ -220,8 +250,12 @@ impl AppTabs {
                     .map(|(_, rig)| rig.tabs[0].id)
             });
 
-        let mut tab_viewer =
-            AppTabViewer::new(self.sender.clone(), self.rig_types.clone(), active_tab_id);
+        let mut tab_viewer = AppTabViewer::new(
+            self.sender.clone(),
+            self.rig_types.clone(),
+            self.available_ports.clone(),
+            active_tab_id,
+        );
 
         DockArea::new(&mut self.dock_state)
             .show_add_buttons(true)
@@ -267,6 +301,9 @@ impl eframe::App for App {
             match message {
                 GuiMessage::InitialState(settings) => {
                     self.tabs.set_tabs(settings);
+                }
+                GuiMessage::AvailablePorts(ports) => {
+                    self.tabs.available_ports = ports;
                 }
             }
         }

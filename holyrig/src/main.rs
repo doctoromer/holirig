@@ -47,7 +47,14 @@ async fn main() -> Result<()> {
 
     tokio::spawn(async move { jsonrpc_server.run().await });
 
-    tokio::spawn(async move { device_manager.run(gui_sender).await });
+    let port_gui_sender = gui_sender.clone();
+
+    tokio::spawn(async move {
+        let result = device_manager.run(gui_sender).await;
+        println!("Manager exited with: {result:?}");
+    });
+
+    tokio::spawn(async move { serial::port_enumerator::run(port_gui_sender).await });
 
     tokio::spawn(async move {
         if let Err(err) = udp_server::run_server(udp_command_sender, udp_message_receiver).await {
