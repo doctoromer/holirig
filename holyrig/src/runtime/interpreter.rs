@@ -272,10 +272,14 @@ impl Interpreter {
                     .map(|arg| self.evaluate_expression(arg, env))
                     .collect::<Result<Vec<_>>>()?;
 
-                let [Value::Bytes(bytes)] = &args[..] else {
-                    bail!("Expected one bytes argument in write, got: {args:?}");
+                let bytes = match &args[..] {
+                    [Value::Bytes(bytes)] => bytes.clone(),
+                    [Value::String(string)] => string.as_bytes().to_vec(),
+                    _ => {
+                        bail!("Expected one bytes or string argument in write, got: {args:?}");
+                    }
                 };
-                api.write(bytes).await?;
+                api.write(&bytes).await?;
                 Ok(())
             }
             "set_var" => {
