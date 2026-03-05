@@ -54,7 +54,7 @@ pub async fn run_server(
                 result?
             },
             response = message_receiver.recv() => {
-                let (udp_response, device_id) = match response? {
+                let (mut udp_response, device_id) = match response? {
                     ManagerMessage::InitialState { rigs } => {
                         let mut response = "Available rigs:".to_string();
                         for (device_id, rig_file_name) in rigs {
@@ -77,6 +77,8 @@ pub async fn run_server(
                         (format!("Device {device_id} status update:\n{}\n", formatted_values.join("\n")), Some(device_id))
                     }
                 };
+                udp_response.push('\n');
+
                 if let Some(device_id) = device_id {
                     if let Some(addr) = device_id_to_addr.get(&device_id) {
                         socket.send_to(udp_response.as_bytes(), addr).await?;
