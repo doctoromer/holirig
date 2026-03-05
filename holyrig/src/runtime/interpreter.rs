@@ -447,6 +447,27 @@ impl Interpreter {
                 BinaryOp::Or => Ok(Value::Boolean(*a || *b)),
                 _ => Err(anyhow!("Invalid operation {:?} for booleans", op)),
             },
+            (
+                Value::EnumVariant {
+                    enum_name: name1,
+                    variant_name: _,
+                    value: value1,
+                },
+                Value::EnumVariant {
+                    enum_name: name2,
+                    variant_name: _,
+                    value: value2,
+                },
+            ) => match op {
+                BinaryOp::Equal => {
+                    if name1 != name2 {
+                        Err(anyhow!("Cannot comapare enums types: {name1}, {name2}"))
+                    } else {
+                        Ok(Value::Boolean(value1 == value2))
+                    }
+                },
+                _ => Err(anyhow!("Invalid operation {:?} for enums", op)),
+            },
             _ => Err(anyhow!(
                 "Type mismatch in binary operation: {:?} {:?} {:?}",
                 left,
