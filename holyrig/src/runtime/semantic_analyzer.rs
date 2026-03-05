@@ -1008,7 +1008,7 @@ impl SemanticAnalyzer {
                 | (DataType::Int, DataType::Bool)
                 | (DataType::Int, DataType::Enum(_))
                 | (DataType::Enum(_), DataType::Int)
-        )
+        ) || from_type == to_type
     }
 }
 
