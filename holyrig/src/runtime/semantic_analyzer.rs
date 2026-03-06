@@ -725,6 +725,7 @@ impl SemanticAnalyzer {
         let expr_type = match expr {
             Expr::Integer(_) => DataType::Int,
             Expr::Float(_) => DataType::Float,
+            Expr::Boolean(_) => DataType::Bool,
             Expr::String(_) => DataType::String,
             Expr::Bytes(_) => DataType::Bytes,
             Expr::Identifier(id) => {

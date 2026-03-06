@@ -348,6 +348,7 @@ impl Interpreter {
         match expr {
             Expr::Integer(i) => Ok(Value::Integer(*i)),
             Expr::Float(f) => Ok(Value::Float(*f)),
+            Expr::Boolean(b) => Ok(Value::Boolean(*b)),
             Expr::Bytes(bytes) => Ok(Value::Bytes(bytes.clone())),
             Expr::String(string) => Ok(Value::String(string.clone())),
             Expr::Identifier(id) => env

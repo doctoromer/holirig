@@ -49,6 +49,10 @@ pub enum Token<'source> {
     Int,
     #[token("bool")]
     Bool,
+    #[token("true")]
+    True,
+    #[token("false")]
+    False,
     #[token("{")]
     BraceOpen,
     #[token("}")]
@@ -211,6 +215,7 @@ pub enum Expr {
     Float(f64),
     String(String),
     Bytes(Vec<u8>),
+    Boolean(bool),
     Identifier(Id),
     QualifiedIdentifier(Id, Id),
     BinaryOp {
@@ -576,6 +581,8 @@ peg::parser! {
             / [Token::Str(s)] {
                 Expr::String(s[2..s.len()-1].to_string())
             }
+            / [Token::True] { Expr::Boolean(true) }
+            / [Token::False] { Expr::Boolean(false) }
             / [Token::Id(scope)] [Token::DoubleColon] [Token::Id(id)] {
                 Expr::QualifiedIdentifier(scope.into(), id.into())
             }
