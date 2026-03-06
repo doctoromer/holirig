@@ -49,6 +49,9 @@ pub enum ManagerCommand {
     RemoveDevice {
         device_id: usize,
     },
+    ListDevices {
+        response_channel: oneshot::Sender<HashMap<usize, String>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -258,14 +261,15 @@ impl DeviceManager {
                     loop {
                         sleep(Duration::from_millis(poll_interval as u64)).await;
 
-                        let values =
-                            match DeviceManager::execute_status_commands(&device).await {
-                                Ok(v) => v,
-                                Err(err) => {
-                                    eprintln!("[manager] Status polling for device {device_id} failed: {err}");
-                                    break;
-                                }
-                            };
+                        let values = match DeviceManager::execute_status_commands(&device).await {
+                            Ok(v) => v,
+                            Err(err) => {
+                                eprintln!(
+                                    "[manager] Status polling for device {device_id} failed: {err}"
+                                );
+                                break;
+                            }
+                        };
 
                         let changed_values: HashMap<String, Value> = values
                             .iter()
@@ -330,7 +334,9 @@ impl DeviceManager {
                 response_channel,
             } => {
                 if let Some(device) = self.devices.get(&device_id).cloned() {
-                    println!("[manager] Executing command '{command_name}' on device {device_id} with params {params:?}");
+                    println!(
+                        "[manager] Executing command '{command_name}' on device {device_id} with params {params:?}"
+                    );
                     tokio::spawn(async move {
                         let external_api = DeviceExternalApi::new(device.command_tx.clone());
                         let result = device
@@ -340,11 +346,15 @@ impl DeviceManager {
 
                         let response = match result {
                             Ok(values) => {
-                                println!("[manager] Command '{command_name}' on device {device_id} succeeded: {values:?}");
+                                println!(
+                                    "[manager] Command '{command_name}' on device {device_id} succeeded: {values:?}"
+                                );
                                 CommandResponse::Success(values)
                             }
                             Err(err) => {
-                                eprintln!("[manager] Command '{command_name}' on device {device_id} failed: {err}");
+                                eprintln!(
+                                    "[manager] Command '{command_name}' on device {device_id} failed: {err}"
+                                );
                                 CommandResponse::Error(err.to_string())
                             }
                         };
@@ -360,6 +370,14 @@ impl DeviceManager {
                         )));
                     }
                 }
+            }
+            ManagerCommand::ListDevices { response_channel } => {
+                let devices: HashMap<usize, String> = self
+                    .devices
+                    .iter()
+                    .map(|(id, device)| (*id, device.settings.rig_type.clone()))
+                    .collect();
+                let _ = response_channel.send(devices);
             }
             ManagerCommand::RemoveDevice { device_id } => {
                 if let Some(device) = self.devices.remove(&device_id) {
@@ -411,7 +429,10 @@ impl DeviceManager {
             .get(&settings.rig_type)
             .context("Unknown rig type")?
             .clone();
-        println!("[manager] Opening device {device_id} ({}) on {}", settings.rig_type, settings.port);
+        println!(
+            "[manager] Opening device {device_id} ({}) on {}",
+            settings.rig_type, settings.port
+        );
         let (serial_device, command_rx) =
             SerialDevice::new(device_id, settings.clone(), self.device_tx.clone()).await?;
 
@@ -451,5 +472,4 @@ impl DeviceManager {
 
         Ok(())
     }
-
 }

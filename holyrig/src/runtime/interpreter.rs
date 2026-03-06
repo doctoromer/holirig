@@ -469,7 +469,7 @@ impl Interpreter {
                     } else {
                         Ok(Value::Boolean(value1 == value2))
                     }
-                },
+                }
                 _ => Err(anyhow!("Invalid operation {:?} for enums", op)),
             },
             _ => Err(anyhow!(
@@ -709,7 +709,7 @@ fn parse_response_with_template(
                 let data_format = DataFormat::try_from(format_str)
                     .context(format!("Invalid format: {}", format_str))?;
                 let value = data_format.decode(bytes).context(format!(
-                    "Failed to decode {} bytes using format {}",
+                    "Failed to decode {} bytes using format {:?}, data: {bytes:?}",
                     length, format_str
                 ))?;
 
