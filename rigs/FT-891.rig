@@ -100,7 +100,7 @@ impl Transceiver for FT891 {
 
     status {
         write(s"IF;");
-        read("49.46.{_:3}.{freq_a:text:9}.{_:5}.{rit_flag:text:1}.{xit_flag:text:1}.{mode_val:text:1}.{_:5}.3B");
+        read("49.46.{_:3}.{freq_a:text:9}.{_:5}.{rit_flag:text:1}.{xit_flag:text:1}.{mode_val:hex:1}.{_:5}.3B");
         set_var(s"freq_a", freq_a);
         set_var(s"rit", rit_flag as bool);
         set_var(s"xit", xit_flag as bool);
@@ -108,7 +108,17 @@ impl Transceiver for FT891 {
         if mode_val <= 8 {
             set_var(s"mode", mode_val as Mode);
         } else if mode_val == 9 {
-            set_var(s"mode", 8 as Mode);
+            set_var(s"mode", Mode::DIGIU);
+        } else if mode_val == 0xA {
+            set_var(s"mode", Mode::FM);
+        } else if mode_val == 0xB {
+            set_var(s"mode", Mode::FM);
+        } else if mode_val == 0xC {
+            set_var(s"mode", Mode::DIGIL);
+        } else if mode_val == 0xD {
+            set_var(s"mode", Mode::AM);
+        } else if mode_val == 0xE {
+            set_var(s"mode", Mode::FM);
         }
 
         write(s"FB;");
