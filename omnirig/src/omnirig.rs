@@ -16,12 +16,12 @@ use auto_dispatch::auto_dispatch;
 
 #[interface("501A2858-3331-467A-837A-989FDEDACC7D")]
 pub unsafe trait IOmniRigX: IDispatch {
-    fn get_InterfaceVersion(&self, Value: *mut i32) -> HRESULT;
-    fn get_SoftwareVersion(&self, Value: *mut i32) -> HRESULT;
-    fn get_Rig1(&self, Value: *mut Option<IRigX>) -> HRESULT;
-    fn get_Rig2(&self, Value: *mut Option<IRigX>) -> HRESULT;
-    fn get_DialogVisible(&self, Value: *mut bool) -> HRESULT;
-    fn set_DialogVisible(&self, Value: bool) -> HRESULT;
+    pub fn get_InterfaceVersion(&self, Value: *mut i32) -> HRESULT;
+    pub fn get_SoftwareVersion(&self, Value: *mut i32) -> HRESULT;
+    pub fn get_Rig1(&self, Value: *mut Option<IRigX>) -> HRESULT;
+    pub fn get_Rig2(&self, Value: *mut Option<IRigX>) -> HRESULT;
+    pub fn get_DialogVisible(&self, Value: *mut bool) -> HRESULT;
+    pub fn set_DialogVisible(&self, Value: bool) -> HRESULT;
 }
 
 #[implement(IOmniRigX)]

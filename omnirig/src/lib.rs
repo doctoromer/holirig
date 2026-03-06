@@ -13,18 +13,19 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::omnirig::OmniRigXFactory;
 
 mod enums;
-mod omnirig;
+pub mod omnirig;
 mod port_bits;
 pub mod provider;
 mod registry;
-mod rig;
+pub mod rig;
 
 pub use enums::{RigParamX, RigStatusX};
 pub use provider::{
     DummyPortBits, DummyProvider, DummyRig, OmniRigProvider, PortBitsControl, RigControl,
 };
 
-const CLSID_OMNIRIG: GUID = GUID::from_u128(0x0839E8C6_ED30_4950_8087_966F970F0CAE);
+pub const CLSID_OMNIRIG: GUID = GUID::from_u128(0x0839E8C6_ED30_4950_8087_966F970F0CAE);
+pub const PROG_ID: &str = "OmniRig.OmniRigX";
 
 pub struct OmniRigHandle {
     shutdown_flag: Arc<AtomicBool>,
@@ -99,7 +100,7 @@ fn com_thread_init_and_run(
     let exe_path = std::env::current_exe()?;
     let exe_path_str = exe_path.to_str().ok_or("Invalid executable path")?;
 
-    registry::register_com_component(&CLSID_OMNIRIG, exe_path_str, "OmniRig.OmniRigX", "1.0")?;
+    registry::register_com_component(&CLSID_OMNIRIG, exe_path_str, PROG_ID, "1.0")?;
 
     let provider = Arc::new(provider);
 
