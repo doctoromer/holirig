@@ -1,56 +1,27 @@
 use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum DataFormatError {
+    #[error("Invalid format name: {0}")]
     InvalidName(String),
+    #[error("Number {value} is too long to fit in {length} bytes")]
     NumberTooLong { value: i32, length: usize },
+    #[error("Negative number {value} is not supported by format {format}")]
     NegativeNotSupported { value: i32, format: DataFormat },
+    #[error("Invalid BCD digit {byte:#X} at position {position}")]
     InvalidBcdDigit { byte: u8, position: usize },
+    #[error("Input data is empty")]
     EmptyInput,
+    #[error("Invalid text format byte {byte:#X} at position {position}")]
     InvalidTextFormat { byte: u8, position: usize },
+    #[error("Invalid hex digit {byte:#X} at position {position}")]
     InvalidHexDigit { byte: u8, position: usize },
+    #[error("Number {value} is out of i32 range")]
     NumberOutOfRange { value: i64 },
 }
-
-impl Display for DataFormatError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DataFormatError::InvalidName(name) => write!(f, "Invalid format name: {name}"),
-            DataFormatError::NumberTooLong { value, length } => {
-                write!(f, "Number {value} is too long to fit in {length} bytes")
-            }
-            DataFormatError::NegativeNotSupported { value, format } => {
-                write!(
-                    f,
-                    "Negative number {value} is not supported by format {format}"
-                )
-            }
-            DataFormatError::InvalidBcdDigit { byte, position } => {
-                write!(f, "Invalid BCD digit {byte:#X} at position {position}")
-            }
-            DataFormatError::EmptyInput => write!(f, "Input data is empty"),
-            DataFormatError::InvalidTextFormat { byte, position } => {
-                write!(
-                    f,
-                    "Invalid text format byte {byte:#X} at position {position}"
-                )
-            }
-            DataFormatError::InvalidHexDigit { byte, position } => {
-                write!(
-                    f,
-                    "Invalid hex digit {byte:#X} at position {position}"
-                )
-            }
-            DataFormatError::NumberOutOfRange { value } => {
-                write!(f, "Number {value} is out of i32 range")
-            }
-        }
-    }
-}
-
-impl std::error::Error for DataFormatError {}
 
 #[derive(Debug, Serialize, Deserialize, Copy, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
