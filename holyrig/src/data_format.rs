@@ -10,6 +10,7 @@ pub enum DataFormatError {
     InvalidBcdDigit { byte: u8, position: usize },
     EmptyInput,
     InvalidTextFormat { byte: u8, position: usize },
+    InvalidHexDigit { byte: u8, position: usize },
     NumberOutOfRange { value: i64 },
 }
 
@@ -36,6 +37,12 @@ impl Display for DataFormatError {
                     "Invalid text format byte {byte:#X} at position {position}"
                 )
             }
+            DataFormatError::InvalidHexDigit { byte, position } => {
+                write!(
+                    f,
+                    "Invalid hex digit {byte:#X} at position {position}"
+                )
+            }
             DataFormatError::NumberOutOfRange { value } => {
                 write!(f, "Number {value} is out of i32 range")
             }
@@ -57,6 +64,7 @@ pub enum DataFormat {
     IntLs,
     IntLu,
     Text,
+    Hex,
 }
 
 impl Display for DataFormat {
@@ -71,6 +79,7 @@ impl Display for DataFormat {
             DataFormat::IntLs => "int_ls",
             DataFormat::IntLu => "int_lu",
             DataFormat::Text => "text",
+            DataFormat::Hex => "hex",
         };
         write!(f, "{result}")
     }
@@ -90,6 +99,7 @@ impl TryFrom<&str> for DataFormat {
             "int_ls" => DataFormat::IntLs,
             "int_lu" => DataFormat::IntLu,
             "text" => DataFormat::Text,
+            "hex" => DataFormat::Hex,
             _ => {
                 return Err(DataFormatError::InvalidName(value.to_string()));
             }
@@ -240,6 +250,23 @@ impl DataFormat {
         Ok(result)
     }
 
+    fn encode_hex(value: i32, length: usize) -> Result<Vec<u8>, DataFormatError> {
+        if value < 0 {
+            return Err(DataFormatError::NegativeNotSupported {
+                value,
+                format: DataFormat::Hex,
+            });
+        }
+        let hex = format!("{value:X}");
+        if hex.len() > length {
+            return Err(DataFormatError::NumberTooLong { value, length });
+        }
+        let mut result = vec![b'0'; length];
+        let start = length - hex.len();
+        result[start..].copy_from_slice(hex.as_bytes());
+        Ok(result)
+    }
+
     fn encode_text(value: i32, length: usize) -> Result<Vec<u8>, DataFormatError> {
         let text = value.to_string();
         if text.len() > length {
@@ -262,6 +289,7 @@ impl DataFormat {
             DataFormat::IntLs => Self::encode_int_ls(value, length),
             DataFormat::IntLu => Self::encode_int_lu(value as u32, length),
             DataFormat::Text => Self::encode_text(value, length),
+            DataFormat::Hex => Self::encode_hex(value, length),
         }
     }
 
@@ -280,6 +308,7 @@ impl DataFormat {
             DataFormat::IntLs => Self::decode_int_ls(data),
             DataFormat::IntLu => Self::decode_int_lu(data),
             DataFormat::Text => Self::decode_text(data),
+            DataFormat::Hex => Self::decode_hex(data),
         }
     }
 
@@ -422,6 +451,23 @@ impl DataFormat {
         Ok(result as i32)
     }
 
+    fn decode_hex(data: &[u8]) -> Result<i32, DataFormatError> {
+        let mut result = 0i64;
+        for (i, &byte) in data.iter().enumerate() {
+            let digit = match byte {
+                b'0'..=b'9' => byte - b'0',
+                b'a'..=b'f' => byte - b'a' + 10,
+                b'A'..=b'F' => byte - b'A' + 10,
+                _ => return Err(DataFormatError::InvalidHexDigit { byte, position: i }),
+            };
+            result = result * 16 + digit as i64;
+        }
+        if result > i32::MAX as i64 {
+            return Err(DataFormatError::NumberOutOfRange { value: result });
+        }
+        Ok(result as i32)
+    }
+
     fn decode_text(data: &[u8]) -> Result<i32, DataFormatError> {
         let mut chars = Vec::with_capacity(data.len());
         let mut started = false;
@@ -429,7 +475,7 @@ impl DataFormat {
         for (i, &byte) in data.iter().enumerate() {
             match byte {
                 b'0' if !started => continue,
-                b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' => {
+                b'0'..=b'9' => {
                     started = true;
                     chars.push(byte);
                 }
@@ -446,7 +492,7 @@ impl DataFormat {
         }
 
         let text = String::from_utf8(chars).unwrap();
-        i32::from_str_radix(&text, 16).map_err(|_| DataFormatError::NumberOutOfRange {
+        text.parse().map_err(|_| DataFormatError::NumberOutOfRange {
             value: text.parse::<i64>().unwrap_or(0),
         })
     }
@@ -825,6 +871,53 @@ mod tests {
                 })
             ));
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_hex_format() -> Result<(), DataFormatError> {
+        // Encode: number -> ASCII hex, zero-padded
+        assert_eq!(DataFormat::Hex.encode(418, 4)?, b"01A2".to_vec());
+        assert_eq!(DataFormat::Hex.encode(255, 2)?, b"FF".to_vec());
+        assert_eq!(DataFormat::Hex.encode(0, 4)?, b"0000".to_vec());
+        assert_eq!(DataFormat::Hex.encode(15, 1)?, b"F".to_vec());
+        assert_eq!(DataFormat::Hex.encode(16, 2)?, b"10".to_vec());
+
+        // Decode: ASCII hex -> number
+        assert_eq!(DataFormat::Hex.decode(b"01A2")?, 418);
+        assert_eq!(DataFormat::Hex.decode(b"FF")?, 255);
+        assert_eq!(DataFormat::Hex.decode(b"0000")?, 0);
+        assert_eq!(DataFormat::Hex.decode(b"ff")?, 255);
+        assert_eq!(DataFormat::Hex.decode(b"F")?, 15);
+        assert_eq!(DataFormat::Hex.decode(b"10")?, 16);
+
+        // Negative not supported
+        assert!(matches!(
+            DataFormat::Hex.encode(-1, 4),
+            Err(DataFormatError::NegativeNotSupported {
+                value: -1,
+                format: DataFormat::Hex
+            })
+        ));
+
+        // Overflow
+        assert!(matches!(
+            DataFormat::Hex.encode(256, 1),
+            Err(DataFormatError::NumberTooLong {
+                value: 256,
+                length: 1
+            })
+        ));
+
+        // Invalid hex digit
+        assert!(matches!(
+            DataFormat::Hex.decode(b"GG"),
+            Err(DataFormatError::InvalidHexDigit {
+                byte: b'G',
+                position: 0
+            })
+        ));
 
         Ok(())
     }
