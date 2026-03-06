@@ -1,10 +1,13 @@
-use anyhow::Result;
 use std::collections::HashMap;
+use std::sync::Arc;
+
+use anyhow::Result;
 use tokio::net::UdpSocket;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
 
+use crate::resources::Resources;
 use crate::serial::ManagerCommand;
 use crate::serial::manager::{CommandResponse, ManagerMessage};
 
@@ -37,7 +40,58 @@ fn parse_command(cmd: &str) -> Result<(usize, String, HashMap<String, String>)> 
     Ok((device_id, command_name, params))
 }
 
+fn format_connect_response(resources: &Resources, devices: &HashMap<usize, String>) -> String {
+    let mut response = String::new();
+
+    response.push_str("=== Devices ===\n");
+    if devices.is_empty() {
+        response.push_str("No devices configured\n");
+    } else {
+        let mut sorted: Vec<_> = devices.iter().collect();
+        sorted.sort_by_key(|(id, _)| *id);
+        for (id, rig_type) in sorted {
+            response.push_str(&format!("{id}: {rig_type}\n"));
+        }
+    }
+
+    for schema in resources.schemas.values() {
+        response.push_str(&format!("\n=== Schema: {} ===\n", schema.name));
+
+        if !schema.enums.is_empty() {
+            response.push_str("\nEnums:\n");
+            for (name, variants) in &schema.enums {
+                response.push_str(&format!("  {name}: {}\n", variants.join(", ")));
+            }
+        }
+
+        if !schema.commands.is_empty() {
+            response.push_str("\nCommands:\n");
+            for (name, params) in &schema.commands {
+                if params.is_empty() {
+                    response.push_str(&format!("  {name}()\n"));
+                } else {
+                    let param_strs: Vec<_> = params
+                        .iter()
+                        .map(|p| format!("{} {}", p.param_type, p.name))
+                        .collect();
+                    response.push_str(&format!("  {name}({})\n", param_strs.join(", ")));
+                }
+            }
+        }
+
+        if !schema.status.is_empty() {
+            response.push_str("\nStatus:\n");
+            for (name, data_type) in &schema.status {
+                response.push_str(&format!("  {data_type} {name}\n"));
+            }
+        }
+    }
+
+    response
+}
+
 pub async fn run_server(
+    resources: Arc<Resources>,
     command_sender: Sender<ManagerCommand>,
     mut message_receiver: Receiver<ManagerMessage>,
 ) -> Result<()> {
@@ -93,8 +147,24 @@ pub async fn run_server(
         };
 
         let cmd = String::from_utf8_lossy(&buf[..len]);
+        let trimmed = cmd.trim();
 
-        match parse_command(&cmd) {
+        if trimmed.eq_ignore_ascii_case("connect") {
+            let (tx, rx) = oneshot::channel();
+            command_sender
+                .send(ManagerCommand::ListDevices {
+                    response_channel: tx,
+                })
+                .await?;
+
+            let devices = rx.await?;
+            let mut response = format_connect_response(&resources, &devices);
+            response.push('\n');
+            socket.send_to(response.as_bytes(), addr).await?;
+            continue;
+        }
+
+        match parse_command(trimmed) {
             Ok((device_id, command_name, params)) => {
                 println!("Received command from {addr}: {device_id} {command_name} {params:?}");
 

@@ -70,8 +70,11 @@ async fn main() -> Result<()> {
         println!("Manager exited with: {result:?}");
     });
 
+    let udp_resources = resources.clone();
     tokio::spawn(async move {
-        if let Err(err) = udp_server::run_server(udp_command_sender, udp_message_receiver).await {
+        if let Err(err) =
+            udp_server::run_server(udp_resources, udp_command_sender, udp_message_receiver).await
+        {
             eprintln!("UDP server error: {err}");
         }
     });
