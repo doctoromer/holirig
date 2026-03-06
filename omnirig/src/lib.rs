@@ -130,6 +130,7 @@ fn com_thread_init_and_run(
         }
 
         let _ = CoRevokeClassObject(cookie);
+        let _ = registry::unregister_com_component(&CLSID_OMNIRIG);
         CoUninitialize();
     }
 
