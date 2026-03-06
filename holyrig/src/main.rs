@@ -2,6 +2,7 @@ use anyhow::Result;
 use eframe::egui;
 use holyrig::interfaces::jsonrpc::JsonRpcServer;
 use holyrig::resources::{ResourceError, Resources};
+use holyrig::serial::port_enumerator::PortEnumeratorError;
 use tokio::sync::mpsc;
 
 use holyrig::interfaces::{rigctld, udp_server};
@@ -49,6 +50,7 @@ async fn main() -> Result<()> {
             device_manager.receiver(),
             tokio::runtime::Handle::current(),
         );
+        println!("Starting OmniRig server");
         omnirig::spawn_omnirig_server(provider).expect("Failed to start OmniRig COM server")
     };
 
@@ -88,7 +90,18 @@ async fn main() -> Result<()> {
     });
 
     let port_gui_sender = gui_sender.clone();
-    tokio::spawn(async move { serial::port_enumerator::run(port_gui_sender).await });
+    tokio::spawn(async move {
+        if let Err(err) = serial::port_enumerator::run(port_gui_sender).await {
+            match err {
+                PortEnumeratorError::Enumeration(err) => {
+                    eprintln!("{}", err.description);
+                }
+                PortEnumeratorError::Send(_) => {
+                    eprintln!("Failed to send ports to GUI task");
+                }
+            }
+        }
+    });
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
