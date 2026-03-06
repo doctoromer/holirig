@@ -429,7 +429,7 @@ impl DataFormat {
         for (i, &byte) in data.iter().enumerate() {
             match byte {
                 b'0' if !started => continue,
-                b'0'..=b'9' => {
+                b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' => {
                     started = true;
                     chars.push(byte);
                 }
@@ -446,7 +446,7 @@ impl DataFormat {
         }
 
         let text = String::from_utf8(chars).unwrap();
-        text.parse().map_err(|_| DataFormatError::NumberOutOfRange {
+        i32::from_str_radix(&text, 16).map_err(|_| DataFormatError::NumberOutOfRange {
             value: text.parse::<i64>().unwrap_or(0),
         })
     }
