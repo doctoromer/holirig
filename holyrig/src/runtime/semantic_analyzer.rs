@@ -1,285 +1,123 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt;
+
+use thiserror::Error;
 
 use super::SchemaFile;
 use super::parser::{BinaryOp, DataType, Expr, InterpolationPart, RigFile, Statement};
 use super::parser_errors::{ErrorLevel, ParseError, ParseErrorType, SourcePosition};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)]
+#[error("{error_type}")]
 pub struct SemanticError {
     pub position: Option<SourcePosition>,
     pub error_type: SemanticErrorType,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)]
 pub enum SemanticErrorType {
-    UndefinedVariable {
-        name: String,
-    },
-    UndefinedFunction {
-        name: String,
-    },
+    #[error("Undefined variable '{name}'")]
+    UndefinedVariable { name: String },
+    #[error("Undefined function '{name}'")]
+    UndefinedFunction { name: String },
+    #[error("Undefined variant '{variant_name}' for enum '{enum_name}'")]
     UndefinedEnumVariant {
         enum_name: String,
         variant_name: String,
     },
-    UndefinedEnum {
-        name: String,
-    },
+    #[error("Undefined enum '{name}'")]
+    UndefinedEnum { name: String },
+    #[error("Type mismatch in {context}: expected {expected:?}, found {found:?}")]
     TypeMismatch {
         expected: DataType,
         found: DataType,
         context: String,
     },
+    #[error("Function '{function_name}' expects {expected} arguments, got {found}")]
     InvalidFunctionArguments {
         function_name: String,
         expected: usize,
         found: usize,
     },
+    #[error("Function '{function_name}' argument {arg_index}: expected {expected}, found {found}")]
     InvalidFunctionArgumentType {
         function_name: String,
         arg_index: usize,
         expected: String,
         found: String,
     },
-    CommandNotInSchema {
-        command_name: String,
-    },
+    #[error("Command '{command_name}' is not defined in the schema")]
+    CommandNotInSchema { command_name: String },
+    #[error(
+        "Parameter '{param_name}' in command '{command_name}': expected {expected:?}, found {found:?}"
+    )]
     ParameterTypeMismatch {
         command_name: String,
         param_name: String,
         expected: DataType,
         found: DataType,
     },
+    #[error("Missing required parameter '{param_name}' for command '{command_name}'")]
     MissingRequiredParameter {
         command_name: String,
         param_name: String,
     },
+    #[error("Unknown parameter '{param_name}' for command '{command_name}'")]
     UnknownParameter {
         command_name: String,
         param_name: String,
     },
+    #[error("Duplicate variant '{variant_name}' in enum '{enum_name}'")]
     DuplicateEnumVariant {
         enum_name: String,
         variant_name: String,
     },
+    #[error("Invalid binary operation: {left_type:?} {op:?} {right_type:?}")]
     InvalidBinaryOperation {
         left_type: DataType,
         op: BinaryOp,
         right_type: DataType,
     },
+    #[error("Schema version mismatch: rig expects '{rig_version}', schema has {schema_version}")]
     SchemaVersionMismatch {
         rig_version: String,
         schema_version: u32,
     },
+    #[error("Schema type mismatch: rig has '{rig_type}', schema expects '{schema_type}'")]
     SchemaTypeMismatch {
         rig_type: String,
         schema_type: String,
     },
+    #[error("Invalid interpolation variable '{variable_name}' in {context}")]
     InvalidInterpolationVariable {
         variable_name: String,
         context: String,
     },
-    EmptyCommand {
-        command_name: String,
-    },
+    #[error("Command '{command_name}' is empty")]
+    EmptyCommand { command_name: String },
+    #[error("Invalid value '{value}' for enum variant '{variant_name}' in enum '{enum_name}'")]
     InvalidEnumVariantValue {
         enum_name: String,
         variant_name: String,
         value: u32,
     },
-    DivisionByZero {
-        context: String,
-    },
-    InvalidDataFormat {
-        format: String,
-        context: String,
-    },
-    InvalidStatusVariable {
-        name: String,
-        context: String,
-    },
+    #[error("Division by zero in {context}")]
+    DivisionByZero { context: String },
+    #[error("Invalid data format '{format}' in {context}")]
+    InvalidDataFormat { format: String, context: String },
+    #[error("Invalid status variable '{name}' in {context}")]
+    InvalidStatusVariable { name: String, context: String },
+    #[error("Status variable '{name}' type mismatch: expected {expected:?}, found {found:?}")]
     StatusVariableTypeMismatch {
         name: String,
         expected: DataType,
         found: DataType,
     },
+    #[error("Invalid cast from {from_type:?} to {to_type:?}")]
     InvalidCast {
         from_type: DataType,
         to_type: DataType,
     },
 }
-
-impl fmt::Display for SemanticError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.error_type {
-            SemanticErrorType::UndefinedVariable { name } => {
-                write!(f, "Undefined variable '{name}'")
-            }
-            SemanticErrorType::UndefinedFunction { name } => {
-                write!(f, "Undefined function '{name}'")
-            }
-            SemanticErrorType::UndefinedEnumVariant {
-                enum_name,
-                variant_name,
-            } => {
-                write!(
-                    f,
-                    "Undefined variant '{variant_name}' for enum '{enum_name}'"
-                )
-            }
-            SemanticErrorType::UndefinedEnum { name } => {
-                write!(f, "Undefined enum '{name}'")
-            }
-            SemanticErrorType::TypeMismatch {
-                expected,
-                found,
-                context,
-            } => {
-                write!(
-                    f,
-                    "Type mismatch in {context}: expected {expected:?}, found {found:?}"
-                )
-            }
-            SemanticErrorType::InvalidFunctionArguments {
-                function_name,
-                expected,
-                found,
-            } => {
-                write!(
-                    f,
-                    "Function '{function_name}' expects {expected} arguments, got {found}"
-                )
-            }
-            SemanticErrorType::InvalidFunctionArgumentType {
-                function_name,
-                arg_index,
-                expected,
-                found,
-            } => {
-                write!(
-                    f,
-                    "Function '{function_name}' argument {arg_index}: expected {expected}, found {found}"
-                )
-            }
-            SemanticErrorType::CommandNotInSchema { command_name } => {
-                write!(f, "Command '{command_name}' is not defined in the schema")
-            }
-            SemanticErrorType::ParameterTypeMismatch {
-                command_name,
-                param_name,
-                expected,
-                found,
-            } => {
-                write!(
-                    f,
-                    "Parameter '{param_name}' in command '{command_name}': expected {expected:?}, found {found:?}"
-                )
-            }
-            SemanticErrorType::MissingRequiredParameter {
-                command_name,
-                param_name,
-            } => {
-                write!(
-                    f,
-                    "Missing required parameter '{param_name}' for command '{command_name}'"
-                )
-            }
-            SemanticErrorType::UnknownParameter {
-                command_name,
-                param_name,
-            } => {
-                write!(
-                    f,
-                    "Unknown parameter '{param_name}' for command '{command_name}'"
-                )
-            }
-            SemanticErrorType::DuplicateEnumVariant {
-                enum_name,
-                variant_name,
-            } => {
-                write!(
-                    f,
-                    "Duplicate variant '{variant_name}' in enum '{enum_name}'"
-                )
-            }
-            SemanticErrorType::InvalidBinaryOperation {
-                left_type,
-                op,
-                right_type,
-            } => {
-                write!(
-                    f,
-                    "Invalid binary operation: {left_type:?} {op:?} {right_type:?}"
-                )
-            }
-            SemanticErrorType::SchemaVersionMismatch {
-                rig_version,
-                schema_version,
-            } => {
-                write!(
-                    f,
-                    "Schema version mismatch: rig expects '{rig_version}', schema has {schema_version}"
-                )
-            }
-            SemanticErrorType::SchemaTypeMismatch {
-                rig_type,
-                schema_type,
-            } => {
-                write!(
-                    f,
-                    "Schema type mismatch: rig has '{rig_type}', schema expects '{schema_type}'"
-                )
-            }
-            SemanticErrorType::InvalidInterpolationVariable {
-                variable_name,
-                context,
-            } => {
-                write!(
-                    f,
-                    "Invalid interpolation variable '{variable_name}' in {context}"
-                )
-            }
-            SemanticErrorType::EmptyCommand { command_name } => {
-                write!(f, "Command '{command_name}' is empty")
-            }
-            SemanticErrorType::InvalidEnumVariantValue {
-                enum_name,
-                variant_name,
-                value,
-            } => {
-                write!(
-                    f,
-                    "Invalid value '{value}' for enum variant '{variant_name}' in enum '{enum_name}'"
-                )
-            }
-            SemanticErrorType::DivisionByZero { context } => {
-                write!(f, "Division by zero in {context}")
-            }
-            SemanticErrorType::InvalidDataFormat { format, context } => {
-                write!(f, "Invalid data format '{format}' in {context}")
-            }
-            SemanticErrorType::InvalidStatusVariable { name, context } => {
-                write!(f, "Invalid status variable '{name}' in {context}")
-            }
-            SemanticErrorType::StatusVariableTypeMismatch {
-                name,
-                expected,
-                found,
-            } => {
-                write!(
-                    f,
-                    "Status variable '{name}' type mismatch: expected {expected:?}, found {found:?}"
-                )
-            }
-            SemanticErrorType::InvalidCast { from_type, to_type } => {
-                write!(f, "Invalid cast from {from_type:?} to {to_type:?}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for SemanticError {}
 
 #[derive(Debug)]
 pub struct SemanticAnalyzer {
