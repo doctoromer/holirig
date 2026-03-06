@@ -1,11 +1,88 @@
-use anyhow::{Context, Result, anyhow, bail};
 use std::collections::HashMap;
 use std::fmt;
+use thiserror::Error;
 
 use super::parser::{
     BinaryOp, DataType, Expr, Id, InterpolationPart, RigFile, Statement, parse_atomic_expr,
 };
-use crate::{data_format::DataFormat, runtime::parser::Enum};
+use crate::{data_format::DataFormat, data_format::DataFormatError, runtime::parser::Enum};
+
+#[derive(Debug, Error)]
+pub enum InterpreterError {
+    #[error("Undefined variable: {0}")]
+    UndefinedVariable(String),
+    #[error("Unknown qualified identifier: {scope}::{name}")]
+    UnknownQualifiedIdentifier { scope: String, name: String },
+    #[error("Unknown command: {0}")]
+    UnknownCommand(String),
+    #[error("Command '{command}' expects {expected} arguments, got {found}")]
+    WrongArgumentCount {
+        command: String,
+        expected: usize,
+        found: usize,
+    },
+    #[error("Unknown function: {0}")]
+    UnknownFunction(String),
+    #[error("If condition must be a boolean, got: {0:?}")]
+    NonBooleanCondition(Value),
+    #[error("Division by zero")]
+    DivisionByZero,
+    #[error("Modulo by zero")]
+    ModuloByZero,
+    #[error("Invalid operation {op:?} for {type_name}")]
+    InvalidOperation {
+        op: BinaryOp,
+        type_name: &'static str,
+    },
+    #[error("Cannot compare enum types: {0}, {1}")]
+    EnumTypeMismatch(String, String),
+    #[error("Type mismatch in binary operation: {left:?} {op:?} {right:?}")]
+    BinaryTypeMismatch {
+        left: Value,
+        op: BinaryOp,
+        right: Value,
+    },
+    #[error("Cannot interpolate value type: {0:?}")]
+    CannotInterpolate(Value),
+    #[error("Invalid format: {0}")]
+    InvalidFormat(String),
+    #[error("Invalid enum value: {value} for enum {enum_name}")]
+    InvalidEnumValue { value: i64, enum_name: String },
+    #[error("Invalid cast from {from:?} to {to:?}")]
+    InvalidCast { from: Value, to: DataType },
+    #[error("Got invalid response: {0:?}")]
+    InvalidResponse(Vec<u8>),
+    #[error("{0}")]
+    InvalidArguments(String),
+    #[error("Response too short: expected {expected} bytes at offset {offset}")]
+    ResponseTooShort { expected: usize, offset: usize },
+    #[error(
+        "Response doesn't match template at offset {offset}: expected {expected:?}, got {actual:?}"
+    )]
+    ResponseMismatch {
+        offset: usize,
+        expected: Vec<u8>,
+        actual: Vec<u8>,
+    },
+    #[error("Unknown parameter: {key} in command {command}")]
+    UnknownParameter { key: String, command: String },
+    #[error("Missing parameter {param} in command {command}")]
+    MissingParameter { param: String, command: String },
+    #[error("Unknown parameters: {0}")]
+    UnknownParameters(String),
+    #[error(transparent)]
+    DataFormat(#[from] DataFormatError),
+    #[error("Failed to decode {length} bytes using format {format:?}, data: {data:?}")]
+    DecodeFailed {
+        length: usize,
+        format: String,
+        data: Vec<u8>,
+        #[source]
+        source: DataFormatError,
+    },
+    #[error(transparent)]
+    External(#[from] anyhow::Error),
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -140,9 +217,9 @@ impl Env {
 }
 
 pub trait ExternalApi: Send + Sync {
-    fn write(&self, data: &[u8]) -> impl Future<Output = Result<()>> + Send;
-    fn read(&self, size: usize) -> impl Future<Output = Result<Vec<u8>>> + Send;
-    fn set_var(&self, var: &str, value: Value) -> Result<()>;
+    fn write(&self, data: &[u8]) -> impl Future<Output = anyhow::Result<()>> + Send;
+    fn read(&self, size: usize) -> impl Future<Output = anyhow::Result<Vec<u8>>> + Send;
+    fn set_var(&self, var: &str, value: Value) -> anyhow::Result<()>;
 }
 
 #[derive(Clone)]
@@ -159,7 +236,7 @@ impl Interpreter {
         &self.rig_file
     }
 
-    pub fn create_env(&self) -> Result<Env> {
+    pub fn create_env(&self) -> Result<Env, InterpreterError> {
         let mut env = Env::new();
 
         for (id, expr) in &self.rig_file.settings.settings {
@@ -180,20 +257,19 @@ impl Interpreter {
         args: &[Value],
         api: &impl ExternalApi,
         env: &mut Env,
-    ) -> Result<()> {
+    ) -> Result<(), InterpreterError> {
         let command = self
             .rig_file
             .impl_block
             .commands
             .get(name)
-            .context("Unknown command name")?;
+            .ok_or_else(|| InterpreterError::UnknownCommand(name.to_string()))?;
         if args.len() != command.parameters.len() {
-            return Err(anyhow!(
-                "Command '{}' expects {} arguments, got {}",
-                command.name,
-                command.parameters.len(),
-                args.len()
-            ));
+            return Err(InterpreterError::WrongArgumentCount {
+                command: command.name.clone(),
+                expected: command.parameters.len(),
+                found: args.len(),
+            });
         }
 
         let mut local_env = Env::with_parent(env.clone());
@@ -209,7 +285,11 @@ impl Interpreter {
         Ok(())
     }
 
-    pub async fn execute_init_with_env(&self, api: &impl ExternalApi, env: &mut Env) -> Result<()> {
+    pub async fn execute_init_with_env(
+        &self,
+        api: &impl ExternalApi,
+        env: &mut Env,
+    ) -> Result<(), InterpreterError> {
         if let Some(init) = &self.rig_file.impl_block.init {
             for statement in &init.statements {
                 self.execute_statement(statement, api, env).await?;
@@ -222,7 +302,7 @@ impl Interpreter {
         &self,
         api: &impl ExternalApi,
         env: &mut Env,
-    ) -> Result<()> {
+    ) -> Result<(), InterpreterError> {
         if let Some(status) = &self.rig_file.impl_block.status {
             for statement in &status.statements {
                 self.execute_statement(statement, api, env).await?;
@@ -237,7 +317,7 @@ impl Interpreter {
         args: &[Expr],
         api: &impl ExternalApi,
         env: &mut Env,
-    ) -> Result<()> {
+    ) -> Result<(), InterpreterError> {
         match name {
             "read" => {
                 match args {
@@ -257,11 +337,13 @@ impl Interpreter {
                     [Expr::Bytes(bytes)] => {
                         let response = api.read(bytes.len()).await?;
                         if &response != bytes {
-                            bail!("Got invalid response: {response:?}");
+                            return Err(InterpreterError::InvalidResponse(response));
                         }
                     }
                     _ => {
-                        bail!("Expected template string in parse, got: {args:?}");
+                        return Err(InterpreterError::InvalidArguments(format!(
+                            "Expected template string in read, got: {args:?}"
+                        )));
                     }
                 };
                 Ok(())
@@ -270,13 +352,15 @@ impl Interpreter {
                 let args = args
                     .iter()
                     .map(|arg| self.evaluate_expression(arg, env))
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>, InterpreterError>>()?;
 
                 let bytes = match &args[..] {
                     [Value::Bytes(bytes)] => bytes.clone(),
                     [Value::String(string)] => string.as_bytes().to_vec(),
                     _ => {
-                        bail!("Expected one bytes or string argument in write, got: {args:?}");
+                        return Err(InterpreterError::InvalidArguments(format!(
+                            "Expected one bytes or string argument in write, got: {args:?}"
+                        )));
                     }
                 };
                 api.write(&bytes).await?;
@@ -286,16 +370,18 @@ impl Interpreter {
                 let args = args
                     .iter()
                     .map(|arg| self.evaluate_expression(arg, env))
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>, InterpreterError>>()?;
 
                 let [Value::String(var), value] = &args[..] else {
-                    bail!("Expected string and value arguments in set_var, got: {args:?}");
+                    return Err(InterpreterError::InvalidArguments(format!(
+                        "Expected string and value arguments in set_var, got: {args:?}"
+                    )));
                 };
 
                 api.set_var(var, value.clone())?;
                 Ok(())
             }
-            _ => Err(anyhow!("Unknown function: {name}")),
+            _ => Err(InterpreterError::UnknownFunction(name.to_string())),
         }
     }
 
@@ -304,7 +390,7 @@ impl Interpreter {
         statement: &Statement,
         api: &impl ExternalApi,
         env: &mut Env,
-    ) -> Result<()> {
+    ) -> Result<(), InterpreterError> {
         match statement {
             Statement::Assign(id, expr) => {
                 let value = self.evaluate_expression(expr, env)?;
@@ -333,10 +419,7 @@ impl Interpreter {
                         }
                     }
                     _ => {
-                        return Err(anyhow!(
-                            "If condition must be a boolean, got: {:?}",
-                            condition_value
-                        ));
+                        return Err(InterpreterError::NonBooleanCondition(condition_value));
                     }
                 }
             }
@@ -344,7 +427,11 @@ impl Interpreter {
         Ok(())
     }
 
-    pub fn evaluate_expression(&self, expr: &Expr, env: &mut Env) -> Result<Value> {
+    pub fn evaluate_expression(
+        &self,
+        expr: &Expr,
+        env: &mut Env,
+    ) -> Result<Value, InterpreterError> {
         match expr {
             Expr::Integer(i) => Ok(Value::Integer(*i)),
             Expr::Float(f) => Ok(Value::Float(*f)),
@@ -353,7 +440,7 @@ impl Interpreter {
             Expr::String(string) => Ok(Value::String(string.clone())),
             Expr::Identifier(id) => env
                 .get(id.as_str())
-                .ok_or_else(|| anyhow!("Undefined variable: {}", id.as_str())),
+                .ok_or_else(|| InterpreterError::UndefinedVariable(id.to_string())),
             Expr::QualifiedIdentifier(scope, id) => {
                 if let Some(value) = env.get_enum_variant(scope.as_str(), id.as_str()) {
                     Ok(Value::EnumVariant {
@@ -362,11 +449,10 @@ impl Interpreter {
                         value,
                     })
                 } else {
-                    Err(anyhow!(
-                        "Unknown qualified identifier: {}::{}",
-                        scope.as_str(),
-                        id.as_str()
-                    ))
+                    Err(InterpreterError::UnknownQualifiedIdentifier {
+                        scope: scope.to_string(),
+                        name: id.to_string(),
+                    })
                 }
             }
             Expr::BinaryOp { left, op, right } => {
@@ -384,7 +470,11 @@ impl Interpreter {
         }
     }
 
-    fn apply_binary_op(left: &Value, op: &BinaryOp, right: &Value) -> Result<Value> {
+    fn apply_binary_op(
+        left: &Value,
+        op: &BinaryOp,
+        right: &Value,
+    ) -> Result<Value, InterpreterError> {
         match (left, right) {
             (Value::Integer(a), Value::Integer(b)) => match op {
                 BinaryOp::Add => Ok(Value::Integer(a + b)),
@@ -392,14 +482,14 @@ impl Interpreter {
                 BinaryOp::Multiply => Ok(Value::Integer(a * b)),
                 BinaryOp::Divide => {
                     if *b == 0 {
-                        Err(anyhow!("Division by zero"))
+                        Err(InterpreterError::DivisionByZero)
                     } else {
                         Ok(Value::Integer(a / b))
                     }
                 }
                 BinaryOp::Modulo => {
                     if *b == 0 {
-                        Err(anyhow!("Modulo by zero"))
+                        Err(InterpreterError::ModuloByZero)
                     } else {
                         Ok(Value::Integer(a % b))
                     }
@@ -425,9 +515,10 @@ impl Interpreter {
                 BinaryOp::LessEqual => Ok(Value::Boolean(a <= b)),
                 BinaryOp::Greater => Ok(Value::Boolean(a > b)),
                 BinaryOp::GreaterEqual => Ok(Value::Boolean(a >= b)),
-                BinaryOp::And | BinaryOp::Or => {
-                    Err(anyhow!("Binary operator is not supported in floats"))
-                }
+                BinaryOp::And | BinaryOp::Or => Err(InterpreterError::InvalidOperation {
+                    op: op.clone(),
+                    type_name: "floats",
+                }),
             },
             (Value::Integer(a), Value::Float(b)) => {
                 Self::apply_binary_op(&Value::Float(*a as f64), op, &Value::Float(*b))
@@ -443,14 +534,20 @@ impl Interpreter {
                 }
                 BinaryOp::Equal => Ok(Value::Boolean(a == b)),
                 BinaryOp::NotEqual => Ok(Value::Boolean(a != b)),
-                _ => Err(anyhow!("Invalid operation {:?} for strings", op)),
+                _ => Err(InterpreterError::InvalidOperation {
+                    op: op.clone(),
+                    type_name: "strings",
+                }),
             },
             (Value::Boolean(a), Value::Boolean(b)) => match op {
                 BinaryOp::Equal => Ok(Value::Boolean(a == b)),
                 BinaryOp::NotEqual => Ok(Value::Boolean(a != b)),
                 BinaryOp::And => Ok(Value::Boolean(*a && *b)),
                 BinaryOp::Or => Ok(Value::Boolean(*a || *b)),
-                _ => Err(anyhow!("Invalid operation {:?} for booleans", op)),
+                _ => Err(InterpreterError::InvalidOperation {
+                    op: op.clone(),
+                    type_name: "booleans",
+                }),
             },
             (
                 Value::EnumVariant {
@@ -466,19 +563,24 @@ impl Interpreter {
             ) => match op {
                 BinaryOp::Equal => {
                     if name1 != name2 {
-                        Err(anyhow!("Cannot comapare enums types: {name1}, {name2}"))
+                        Err(InterpreterError::EnumTypeMismatch(
+                            name1.clone(),
+                            name2.clone(),
+                        ))
                     } else {
                         Ok(Value::Boolean(value1 == value2))
                     }
                 }
-                _ => Err(anyhow!("Invalid operation {:?} for enums", op)),
+                _ => Err(InterpreterError::InvalidOperation {
+                    op: op.clone(),
+                    type_name: "enums",
+                }),
             },
-            _ => Err(anyhow!(
-                "Type mismatch in binary operation: {:?} {:?} {:?}",
-                left,
-                op,
-                right
-            )),
+            _ => Err(InterpreterError::BinaryTypeMismatch {
+                left: left.clone(),
+                op: op.clone(),
+                right: right.clone(),
+            }),
         }
     }
 
@@ -486,7 +588,7 @@ impl Interpreter {
         &self,
         parts: &[InterpolationPart],
         env: &mut Env,
-    ) -> Result<Value> {
+    ) -> Result<Value, InterpreterError> {
         let mut result = Vec::new();
 
         for part in parts {
@@ -515,10 +617,10 @@ impl Interpreter {
         format: Option<&str>,
         length: usize,
         env: &mut Env,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<Vec<u8>, InterpreterError> {
         let value = env
             .get(name)
-            .ok_or_else(|| anyhow!("Undefined variable: {}", name))?;
+            .ok_or_else(|| InterpreterError::UndefinedVariable(name.to_string()))?;
 
         match format {
             None => match value {
@@ -532,11 +634,11 @@ impl Interpreter {
                     let bytes = format.encode(value as i32, length)?;
                     Ok(bytes)
                 }
-                _ => Err(anyhow!("Cannot interpolate value type: {:?}", value)),
+                other => Err(InterpreterError::CannotInterpolate(other)),
             },
             Some(format_str) => {
                 let format = DataFormat::try_from(format_str)
-                    .map_err(|_| anyhow!("Invalid format: {}", format_str))?;
+                    .map_err(|_| InterpreterError::InvalidFormat(format_str.to_string()))?;
 
                 match value {
                     Value::Integer(i) => {
@@ -547,13 +649,18 @@ impl Interpreter {
                         let bytes = format.encode(value as i32, length)?;
                         Ok(bytes)
                     }
-                    _ => Err(anyhow!("Cannot interpolate value type: {:?}", value)),
+                    other => Err(InterpreterError::CannotInterpolate(other)),
                 }
             }
         }
     }
 
-    fn apply_cast(&self, value: &Value, target_type: &DataType, env: &mut Env) -> Result<Value> {
+    fn apply_cast(
+        &self,
+        value: &Value,
+        target_type: &DataType,
+        env: &mut Env,
+    ) -> Result<Value, InterpreterError> {
         match (value, target_type) {
             (Value::Integer(i), DataType::Float) => Ok(Value::Float(*i as f64)),
             (Value::Integer(i), DataType::Bool) => Ok(Value::Boolean(*i != 0)),
@@ -565,17 +672,19 @@ impl Interpreter {
                         value: *i as u32,
                     })
                 } else {
-                    Err(anyhow!("Invalid enum value: {} for enum {}", i, enum_name))
+                    Err(InterpreterError::InvalidEnumValue {
+                        value: *i,
+                        enum_name: enum_name.clone(),
+                    })
                 }
             }
             (Value::Float(f), DataType::Int) => Ok(Value::Integer(*f as i64)),
             (Value::Boolean(b), DataType::Int) => Ok(Value::Integer(if *b { 1 } else { 0 })),
             (Value::EnumVariant { value, .. }, DataType::Int) => Ok(Value::Integer(*value as i64)),
-            _ => Err(anyhow!(
-                "Invalid cast from {:?} to {:?}",
-                value,
-                target_type
-            )),
+            _ => Err(InterpreterError::InvalidCast {
+                from: value.clone(),
+                to: target_type.clone(),
+            }),
         }
     }
 
@@ -584,13 +693,13 @@ impl Interpreter {
         name: &str,
         args: HashMap<String, String>,
         env: &mut Env,
-    ) -> Result<Vec<Value>> {
+    ) -> Result<Vec<Value>, InterpreterError> {
         let params = &self
             .rig_file
             .impl_block
             .commands
             .get(name)
-            .context("Unknown command")?
+            .ok_or_else(|| InterpreterError::UnknownCommand(name.to_string()))?
             .parameters;
 
         let mut evaluated_args = args
@@ -599,39 +708,44 @@ impl Interpreter {
                 let param_type = &params
                     .iter()
                     .find(|param| &param.name == key)
-                    .context(format!("Unknown param: {key} in command {name}"))?
+                    .ok_or_else(|| InterpreterError::UnknownParameter {
+                        key: key.clone(),
+                        command: name.to_string(),
+                    })?
                     .param_type;
 
                 let parsed = if let DataType::Enum(enum_name) = param_type {
                     Expr::QualifiedIdentifier(Id::new(enum_name), Id::new(value))
                 } else {
-                    parse_atomic_expr(value).map_err(|err| anyhow!(err.to_string()))?
+                    parse_atomic_expr(value)
+                        .map_err(|err| InterpreterError::InvalidArguments(err.to_string()))?
                 };
                 Ok((key.clone(), self.evaluate_expression(&parsed, env)?))
             })
-            .collect::<Result<HashMap<_, _>>>()?;
+            .collect::<Result<HashMap<_, _>, InterpreterError>>()?;
 
         let result = params
             .iter()
             .map(|param| {
-                let value = evaluated_args.remove(&param.name).context(format!(
-                    "Missing parameter {} in command {name}",
-                    param.name
-                ))?;
+                let value = evaluated_args.remove(&param.name).ok_or_else(|| {
+                    InterpreterError::MissingParameter {
+                        param: param.name.clone(),
+                        command: name.to_string(),
+                    }
+                })?;
                 Ok(value)
             })
-            .collect::<Result<_>>()?;
+            .collect::<Result<_, InterpreterError>>()?;
 
         if !evaluated_args.is_empty() {
-            bail!(
-                "Unknown parameters: {}",
-                evaluated_args.into_keys().collect::<Vec<_>>().join(", ")
-            );
+            return Err(InterpreterError::UnknownParameters(
+                evaluated_args.into_keys().collect::<Vec<_>>().join(", "),
+            ));
         }
         Ok(result)
     }
 
-    pub async fn execute_init(&self, external: &impl ExternalApi) -> Result<()> {
+    pub async fn execute_init(&self, external: &impl ExternalApi) -> Result<(), InterpreterError> {
         let mut env = self.create_env()?;
         self.execute_init_with_env(external, &mut env).await
     }
@@ -641,7 +755,7 @@ impl Interpreter {
         command_name: &str,
         params: HashMap<String, String>,
         external: &impl ExternalApi,
-    ) -> Result<HashMap<String, Value>> {
+    ) -> Result<HashMap<String, Value>, InterpreterError> {
         let mut env = self.create_env()?;
 
         let args = self.eval_external_args(command_name, params, &mut self.create_env()?)?;
@@ -651,7 +765,10 @@ impl Interpreter {
         Ok(HashMap::new())
     }
 
-    pub async fn execute_status(&self, external: &impl ExternalApi) -> Result<()> {
+    pub async fn execute_status(
+        &self,
+        external: &impl ExternalApi,
+    ) -> Result<(), InterpreterError> {
         let mut env = self.create_env()?;
         self.execute_status_with_env(external, &mut env).await
     }
@@ -667,28 +784,26 @@ fn parse_response_with_template(
     parts: &[InterpolationPart],
     response: &[u8],
     env: &mut Env,
-) -> Result<()> {
+) -> Result<(), InterpreterError> {
     let mut offset = 0;
 
     for part in parts {
         match part {
             InterpolationPart::Literal(expected_bytes) => {
                 if offset + expected_bytes.len() > response.len() {
-                    bail!(
-                        "Response too short: expected {} bytes at offset {}",
-                        expected_bytes.len(),
-                        offset
-                    );
+                    return Err(InterpreterError::ResponseTooShort {
+                        expected: expected_bytes.len(),
+                        offset,
+                    });
                 }
 
                 let actual = &response[offset..offset + expected_bytes.len()];
                 if actual != expected_bytes {
-                    bail!(
-                        "Response doesn't match template at offset {}: expected {:?}, got {:?}",
+                    return Err(InterpreterError::ResponseMismatch {
                         offset,
-                        expected_bytes,
-                        actual
-                    );
+                        expected: expected_bytes.to_vec(),
+                        actual: actual.to_vec(),
+                    });
                 }
                 offset += expected_bytes.len();
             }
@@ -698,21 +813,25 @@ fn parse_response_with_template(
                 length,
             } => {
                 if offset + length > response.len() {
-                    bail!(
-                        "Response too short: expected {} bytes at offset {}",
-                        length,
-                        offset
-                    );
+                    return Err(InterpreterError::ResponseTooShort {
+                        expected: *length,
+                        offset,
+                    });
                 }
 
                 let bytes = &response[offset..offset + length];
                 let format_str = format.as_deref().unwrap_or("int_lu");
                 let data_format = DataFormat::try_from(format_str)
-                    .context(format!("Invalid format: {}", format_str))?;
-                let value = data_format.decode(bytes).context(format!(
-                    "Failed to decode {} bytes using format {:?}, data: {bytes:?}",
-                    length, format_str
-                ))?;
+                    .map_err(|_| InterpreterError::InvalidFormat(format_str.to_string()))?;
+                let value =
+                    data_format
+                        .decode(bytes)
+                        .map_err(|source| InterpreterError::DecodeFailed {
+                            length: *length,
+                            format: format_str.to_string(),
+                            data: bytes.to_vec(),
+                            source,
+                        })?;
 
                 if name != "_" {
                     env.set(name.clone(), Value::Integer(value as i64));
@@ -727,6 +846,7 @@ fn parse_response_with_template(
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
     use parking_lot::RwLock;
 
     use super::*;
@@ -938,10 +1058,10 @@ mod tests {
                 assert_eq!(enum_name, "Vfo");
                 assert_eq!(variant_name, "A");
                 assert_eq!(value, 0);
-                Ok(())
             }
-            _ => Err(anyhow!("Expected enum variant")),
+            other => panic!("Expected enum variant, got: {other:?}"),
         }
+        Ok(())
     }
 
     #[tokio::test]
