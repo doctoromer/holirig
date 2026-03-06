@@ -12,17 +12,20 @@
 - Validator binary: `cargo run --bin parser -p holyrig -- --rig <file> --schema <schema>`
 
 ## Critical: ASCII vs Binary Protocol Handling
-- The `.rig` string literals (in `"..."`) are parsed as hex when content has NO `{}` interpolation
-- Strings with `{}` go through `StringToken` lexer where `Id` tokens become ASCII bytes
-- **Problem**: `HexString` has priority 3 > `Id` priority 2. Tokens like `FA`, `AB`, `FB`, `CF` match as hex bytes, NOT ASCII!
-- **Solution for ASCII protocols (Yaesu, Kenwood)**: Express ALL characters as hex ASCII codes
-  - Example: `AI0;` becomes `"41.49.30.3B"` (A=41, I=49, 0=30, ;=3B)
-  - Use `.` as visual separator (produces empty bytes)
-- ICOM protocols use raw binary bytes so hex strings work naturally
+- `write()` accepts both `Value::Bytes` (from `"..."`) and `Value::String` (from `s"..."`)
+- **For non-interpolated ASCII commands**: Use `s"..."` string syntax directly
+  - Example: `write(s"AI0;")`, `write(s"RC;")`, `write(s"ST1;")`
+  - This is cleaner and avoids hex encoding entirely
+- **For interpolated templates** (containing `{var:format:len}`): Must use `"..."` byte syntax with hex-encoded literals
+  - `HexString` has priority 3 > `Id` priority 2, so tokens like `FA`, `AB`, `FB`, `CF` match as hex bytes, NOT ASCII
+  - Express ASCII characters as hex codes: `"46.41.{freq:text:9}.3B"` for `FA{freq};\`
+  - Use `.` as visual separator between hex bytes
+- `read()` templates always use `"..."` byte format with hex-encoded literals (interpolation required for parsing)
+- ICOM protocols use raw binary bytes so hex strings work naturally for both write and read
 
 ## Supported Built-in Functions
-- `write(bytes)` - send data
-- `read(template)` - receive and parse data (length auto-calculated from template)
+- `write(bytes)` or `write(string)` - send data (accepts both `"..."` bytes and `s"..."` strings)
+- `read(template)` - receive and parse data (length auto-calculated from template, always uses `"..."` byte format)
 - `set_var(s"name", value)` - set status variable
 - `error(s"message")` - report error (semantic analyzer accepts it, interpreter will bail)
 - No `read()` needed for fire-and-forget commands (Yaesu CAT with ReplyLength=0)
