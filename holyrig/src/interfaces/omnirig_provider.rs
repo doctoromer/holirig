@@ -77,70 +77,81 @@ fn rigparam_to_vfo_args(param: RigParamX) -> Option<(&'static str, &'static str)
 
 pub struct HolyRigProvider {
     command_sender: Sender<ManagerCommand>,
-    message_receiver: Receiver<ManagerMessage>,
+    statuses: [Arc<RwLock<CachedStatus>>; 2],
     tokio_runtime: tokio::runtime::Handle,
 }
 
 impl HolyRigProvider {
     pub fn new(
         command_sender: Sender<ManagerCommand>,
-        message_receiver: Receiver<ManagerMessage>,
+        mut message_receiver: Receiver<ManagerMessage>,
         tokio_runtime: tokio::runtime::Handle,
     ) -> Self {
+        let statuses = [
+            Arc::new(RwLock::new(CachedStatus::default())),
+            Arc::new(RwLock::new(CachedStatus::default())),
+        ];
+
+        let statuses_clone = statuses.clone();
+        tokio_runtime.spawn(async move {
+            loop {
+                match message_receiver.recv().await {
+                    Ok(ManagerMessage::StatusUpdate {
+                        device_id,
+                        values,
+                    }) => {
+                        if let Some(status) = statuses_clone.get(device_id) {
+                            let mut s = status.write();
+                            s.connected = true;
+                            for (name, value) in values {
+                                match (name.as_str(), &value) {
+                                    ("freq_a", Value::Integer(f)) => s.freq_a = *f as i32,
+                                    ("freq_b", Value::Integer(f)) => s.freq_b = *f as i32,
+                                    ("mode", Value::String(m)) => s.mode = m.clone(),
+                                    ("vfo", Value::String(v)) => s.vfo = v.clone(),
+                                    ("cw_pitch", Value::Integer(p)) => s.cw_pitch = *p as i32,
+                                    ("transmit", Value::Boolean(t)) => s.transmit = *t,
+                                    ("split", Value::Boolean(sp)) => s.split = *sp,
+                                    ("rit", Value::Boolean(r)) => s.rit = *r,
+                                    ("xit", Value::Boolean(x)) => s.xit = *x,
+                                    ("rit_offset", Value::Integer(o)) => s.rit_offset = *o as i32,
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    Ok(ManagerMessage::DeviceConnected { device_id, .. }) => {
+                        if let Some(status) = statuses_clone.get(device_id) {
+                            status.write().connected = true;
+                        }
+                    }
+                    Ok(ManagerMessage::DeviceDisconnected { device_id }) => {
+                        if let Some(status) = statuses_clone.get(device_id) {
+                            status.write().connected = false;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(err) => {
+                        eprintln!("Omnirig recv error: {err}");
+                        break
+                    },
+                    Ok(ManagerMessage::InitialState { .. }) => {}
+                }
+            }
+        });
+
         Self {
             command_sender,
-            message_receiver,
+            statuses,
             tokio_runtime,
         }
     }
 
     fn create_rig(&self, device_id: usize) -> Box<dyn RigControl> {
-        let status = Arc::new(RwLock::new(CachedStatus::default()));
-        let status_clone = status.clone();
-        let mut receiver = self.message_receiver.resubscribe();
-
-        self.tokio_runtime.spawn(async move {
-            loop {
-                match receiver.recv().await {
-                    Ok(ManagerMessage::StatusUpdate {
-                        device_id: id,
-                        values,
-                    }) if id == device_id => {
-                        let mut s = status_clone.write();
-                        for (name, value) in values {
-                            match (name.as_str(), &value) {
-                                ("freq_a", Value::Integer(f)) => s.freq_a = *f as i32,
-                                ("freq_b", Value::Integer(f)) => s.freq_b = *f as i32,
-                                ("mode", Value::String(m)) => s.mode = m.clone(),
-                                ("vfo", Value::String(v)) => s.vfo = v.clone(),
-                                ("cw_pitch", Value::Integer(p)) => s.cw_pitch = *p as i32,
-                                ("transmit", Value::Boolean(t)) => s.transmit = *t,
-                                ("split", Value::Boolean(sp)) => s.split = *sp,
-                                ("rit", Value::Boolean(r)) => s.rit = *r,
-                                ("xit", Value::Boolean(x)) => s.xit = *x,
-                                ("rit_offset", Value::Integer(o)) => s.rit_offset = *o as i32,
-                                _ => {}
-                            }
-                        }
-                    }
-                    Ok(ManagerMessage::DeviceConnected { device_id: id, .. })
-                        if id == device_id =>
-                    {
-                        status_clone.write().connected = true;
-                    }
-                    Ok(ManagerMessage::DeviceDisconnected { device_id: id }) if id == device_id => {
-                        status_clone.write().connected = false;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    _ => {}
-                }
-            }
-        });
-
         Box::new(HolyRigControl {
             device_id,
             command_sender: self.command_sender.clone(),
-            status,
+            status: self.statuses[device_id].clone(),
             tokio_runtime: self.tokio_runtime.clone(),
         })
     }
@@ -253,8 +264,6 @@ impl RigControl for HolyRigControl {
         self.status.read().cw_pitch
     }
 
-    // --- Frequency setters ---
-
     fn set_freq(&self, value: i32) {
         self.send_command(
             "set_freq",
@@ -298,8 +307,6 @@ impl RigControl for HolyRigControl {
             HashMap::from([("pitch".to_string(), value.to_string())]),
         );
     }
-
-    // --- VFO ---
 
     fn vfo(&self) -> RigParamX {
         vfo_str_to_rigparam(&self.status.read().vfo)
