@@ -283,6 +283,7 @@ impl DeviceManager {
                             .collect();
 
                         if !changed_values.is_empty() {
+                            println!("[manager] Status update for {device_id}: {changed_values:?}");
                             let _ = manager_tx.send(ManagerMessage::StatusUpdate {
                                 device_id,
                                 values: changed_values,
