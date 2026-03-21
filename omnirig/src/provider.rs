@@ -82,6 +82,12 @@ pub struct DummyRig {
     mode: RwLock<RigParamX>,
 }
 
+impl Default for DummyRig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DummyRig {
     pub fn new() -> Self {
         Self {
@@ -222,6 +228,12 @@ pub struct DummyPortBits {
     cts: RwLock<bool>,
     dsr: RwLock<bool>,
     locked: RwLock<bool>,
+}
+
+impl Default for DummyPortBits {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DummyPortBits {

@@ -48,6 +48,7 @@ async fn main() -> Result<()> {
         let provider = HolyRigProvider::new(
             device_manager.sender(),
             device_manager.receiver(),
+            resources.clone(),
             tokio::runtime::Handle::current(),
         );
         println!("Starting OmniRig server");

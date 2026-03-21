@@ -6,7 +6,9 @@ use parking_lot::RwLock;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::Sender;
 
+use crate::resources::Resources;
 use crate::runtime::Value;
+use crate::runtime::RigFile;
 use crate::serial::ManagerCommand;
 use crate::serial::manager::ManagerMessage;
 
@@ -23,6 +25,7 @@ struct CachedStatus {
     xit: bool,
     rit_offset: i32,
     connected: bool,
+    supported_modes: i32,
 }
 
 fn mode_str_to_rigparam(mode: &str) -> RigParamX {
@@ -63,6 +66,36 @@ fn vfo_str_to_rigparam(vfo: &str) -> RigParamX {
     }
 }
 
+fn mode_variant_to_rigparam(variant_name: &str) -> Option<RigParamX> {
+    match variant_name {
+        "CWU" => Some(RigParamX::CwU),
+        "CWL" => Some(RigParamX::CwL),
+        "USB" => Some(RigParamX::SsbU),
+        "LSB" => Some(RigParamX::SsbL),
+        "DIGIU" => Some(RigParamX::DigU),
+        "DIGIL" => Some(RigParamX::DigL),
+        "AM" => Some(RigParamX::Am),
+        "FM" => Some(RigParamX::Fm),
+        _ => None,
+    }
+}
+
+fn compute_supported_modes(rig_file: &RigFile) -> i32 {
+    rig_file
+        .impl_block
+        .enums
+        .iter()
+        .find(|e| e.name == "Mode")
+        .map(|mode_enum| {
+            mode_enum
+                .variants
+                .keys()
+                .filter_map(|name| mode_variant_to_rigparam(name))
+                .fold(0i32, |acc, p| acc | p as i32)
+        })
+        .unwrap_or(0)
+}
+
 fn rigparam_to_vfo_args(param: RigParamX) -> Option<(&'static str, &'static str)> {
     match param {
         RigParamX::VfoAA => Some(("A", "A")),
@@ -85,6 +118,7 @@ impl HolyRigProvider {
     pub fn new(
         command_sender: Sender<ManagerCommand>,
         mut message_receiver: Receiver<ManagerMessage>,
+        resources: Arc<Resources>,
         tokio_runtime: tokio::runtime::Handle,
     ) -> Self {
         let statuses = [
@@ -135,7 +169,16 @@ impl HolyRigProvider {
                         eprintln!("Omnirig recv error: {err}");
                         break
                     },
-                    Ok(ManagerMessage::InitialState { .. }) => {}
+                    Ok(ManagerMessage::InitialState { rigs }) => {
+                        for (device_id, rig_type) in &rigs {
+                            if let Some(interpreter) = resources.rigs.get(rig_type) {
+                                let modes = compute_supported_modes(interpreter.rig_file());
+                                if let Some(status) = statuses_clone.get(*device_id) {
+                                    status.write().supported_modes = modes;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -228,7 +271,6 @@ impl RigControl for HolyRigControl {
     }
 
     fn writeable_params(&self) -> i32 {
-        // TODO: Get the writeable values from the rig file
         self.readable_params()
             | (RigParamX::VfoAA as i32)
             | (RigParamX::VfoAB as i32)
@@ -237,6 +279,7 @@ impl RigControl for HolyRigControl {
             | (RigParamX::VfoEqual as i32)
             | (RigParamX::VfoSwap as i32)
             | (RigParamX::Rit0 as i32)
+            | self.status.read().supported_modes
     }
 
     fn freq(&self) -> i32 {

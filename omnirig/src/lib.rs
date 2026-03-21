@@ -56,7 +56,7 @@ impl Drop for OmniRigHandle {
 /// Blocks until COM registration is complete and the server is ready to accept clients.
 /// Returns a shutdown handle, or an error if COM initialization failed.
 pub fn spawn_omnirig_server(
-    provider: impl OmniRigProvider + Send + 'static,
+    provider: impl OmniRigProvider + 'static,
 ) -> Result<OmniRigHandle, Box<dyn std::error::Error>> {
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let shutdown_flag_clone = shutdown_flag.clone();
