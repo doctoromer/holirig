@@ -634,6 +634,11 @@ impl Interpreter {
                     let bytes = format.encode(value as i32, length)?;
                     Ok(bytes)
                 }
+                Value::Boolean(value) => {
+                    let format = DataFormat::IntLu;
+                    let bytes = format.encode(value as i32, length)?;
+                    Ok(bytes)
+                }
                 other => Err(InterpreterError::CannotInterpolate(other)),
             },
             Some(format_str) => {
@@ -646,6 +651,10 @@ impl Interpreter {
                         Ok(bytes)
                     }
                     Value::EnumVariant { value, .. } => {
+                        let bytes = format.encode(value as i32, length)?;
+                        Ok(bytes)
+                    }
+                    Value::Boolean(value) => {
                         let bytes = format.encode(value as i32, length)?;
                         Ok(bytes)
                     }
