@@ -1,8 +1,8 @@
 use windows::core::GUID;
 use windows::Win32::System::Registry::HKEY_CURRENT_USER;
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW, HKEY, KEY_WOW64_32KEY,
-    KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SAM_FLAGS, REG_SZ,
+    RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW, HKEY, KEY_WOW64_32KEY, KEY_WRITE,
+    REG_OPTION_NON_VOLATILE, REG_SAM_FLAGS, REG_SZ,
 };
 use windows_core::PCWSTR;
 

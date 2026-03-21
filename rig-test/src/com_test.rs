@@ -144,11 +144,7 @@ fn run_com_tests(verbose: bool) {
     }
 
     let unknown = unsafe {
-        CoCreateInstance::<_, windows::core::IUnknown>(
-            &CLSID_OMNIRIG,
-            None,
-            CLSCTX_LOCAL_SERVER,
-        )
+        CoCreateInstance::<_, windows::core::IUnknown>(&CLSID_OMNIRIG, None, CLSCTX_LOCAL_SERVER)
     };
 
     let unknown = match unknown {
@@ -354,12 +350,7 @@ fn dispatch_get_i32(dispatch: &IDispatch, name: &str) -> Result<i32, String> {
                 0x0400, // LOCALE_USER_DEFAULT
                 &mut dispid,
             )
-            .map_err(|e| {
-                format!(
-                    "GetIDsOfNames failed: HRESULT 0x{:08X}",
-                    e.code().0 as u32
-                )
-            })?;
+            .map_err(|e| format!("GetIDsOfNames failed: HRESULT 0x{:08X}", e.code().0 as u32))?;
 
         let mut result = VARIANT::default();
         let mut exc_info = std::mem::zeroed();

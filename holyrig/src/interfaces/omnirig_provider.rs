@@ -7,8 +7,8 @@ use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::Sender;
 
 use crate::resources::Resources;
-use crate::runtime::Value;
 use crate::runtime::RigFile;
+use crate::runtime::Value;
 use crate::serial::ManagerCommand;
 use crate::serial::manager::ManagerMessage;
 
@@ -130,10 +130,7 @@ impl HolyRigProvider {
         tokio_runtime.spawn(async move {
             loop {
                 match message_receiver.recv().await {
-                    Ok(ManagerMessage::StatusUpdate {
-                        device_id,
-                        values,
-                    }) => {
+                    Ok(ManagerMessage::StatusUpdate { device_id, values }) => {
                         if let Some(status) = statuses_clone.get(device_id) {
                             let mut s = status.write();
                             s.connected = true;
@@ -167,8 +164,8 @@ impl HolyRigProvider {
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     Err(err) => {
                         eprintln!("Omnirig recv error: {err}");
-                        break
-                    },
+                        break;
+                    }
                     Ok(ManagerMessage::InitialState { rigs }) => {
                         for (device_id, rig_type) in &rigs {
                             if let Some(interpreter) = resources.rigs.get(rig_type) {

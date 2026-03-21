@@ -47,7 +47,12 @@ pub unsafe trait IRigX: IDispatch {
     pub fn SetSimplexMode(&self, Freq: i32) -> HRESULT;
     pub fn SetSplitMode(&self, RxFreq: i32, TxFreq: i32) -> HRESULT;
     pub fn FrequencyOfTone(&self, Tone: i32, value: *mut i32) -> HRESULT;
-    pub fn SendCustomCommand(&self, Command: VARIANT, ReplyLength: i32, ReplyEnd: VARIANT) -> HRESULT;
+    pub fn SendCustomCommand(
+        &self,
+        Command: VARIANT,
+        ReplyLength: i32,
+        ReplyEnd: VARIANT,
+    ) -> HRESULT;
     pub fn GetRxFrequency(&self, value: *mut i32) -> HRESULT;
     pub fn GetTxFrequency(&self, value: *mut i32) -> HRESULT;
     pub fn get_PortBits(&self, value: *mut Option<IDispatch>) -> HRESULT;
