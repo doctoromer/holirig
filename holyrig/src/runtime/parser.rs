@@ -344,20 +344,36 @@ pub struct RigFile {
     pub impl_block: Impl,
 }
 
-impl RigFile {
-    pub fn get_supported_status_fields(&self) -> HashSet<String> {
-        let mut implemented_status = HashSet::new();
-        if let Some(status) = &self.impl_block.status {
-            for stmt in &status.statements {
-                if let Statement::FunctionCall { name, args } = stmt
-                    && name == "set_var"
-                    && let Some(Expr::String(var_name)) = args.first()
-                {
-                    implemented_status.insert(var_name.clone());
+fn collect_set_var_fields(statements: &[Statement], fields: &mut HashSet<String>) {
+    for stmt in statements {
+        match stmt {
+            Statement::FunctionCall { name, args } if name == "set_var" => {
+                if let Some(Expr::String(var_name)) = args.first() {
+                    fields.insert(var_name.clone());
                 }
             }
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_set_var_fields(then_body, fields);
+                if let Some(else_body) = else_body {
+                    collect_set_var_fields(else_body, fields);
+                }
+            }
+            _ => {}
         }
-        implemented_status
+    }
+}
+
+impl RigFile {
+    pub fn get_supported_status_fields(&self) -> HashSet<String> {
+        let mut fields = HashSet::new();
+        if let Some(status) = &self.impl_block.status {
+            collect_set_var_fields(&status.statements, &mut fields);
+        }
+        fields
     }
 }
 
