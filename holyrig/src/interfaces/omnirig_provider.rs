@@ -26,6 +26,7 @@ struct CachedStatus {
     rit_offset: i32,
     connected: bool,
     supported_modes: i32,
+    readable_params: i32,
 }
 
 fn mode_str_to_rigparam(mode: &str) -> RigParamX {
@@ -94,6 +95,34 @@ fn compute_supported_modes(rig_file: &RigFile) -> i32 {
                 .fold(0i32, |acc, p| acc | p as i32)
         })
         .unwrap_or(0)
+}
+
+fn status_field_to_rigparams(field: &str) -> i32 {
+    match field {
+        "freq_a" => RigParamX::FreqA as i32,
+        "freq_b" => RigParamX::FreqB as i32,
+        "cw_pitch" => RigParamX::Pitch as i32,
+        "rit_offset" => RigParamX::RitOffset as i32,
+        "transmit" => (RigParamX::Rx as i32) | (RigParamX::Tx as i32),
+        "split" => (RigParamX::SplitOn as i32) | (RigParamX::SplitOff as i32),
+        "rit" => (RigParamX::RitOn as i32) | (RigParamX::RitOff as i32),
+        "xit" => (RigParamX::XitOn as i32) | (RigParamX::XitOff as i32),
+        "vfo" => (RigParamX::VfoA as i32) | (RigParamX::VfoB as i32),
+        _ => 0,
+    }
+}
+
+fn compute_readable_params(rig_file: &RigFile) -> i32 {
+    let status_fields = rig_file.get_supported_status_fields();
+    let mut bitmask: i32 = 0;
+    for field in &status_fields {
+        if field == "mode" {
+            bitmask |= compute_supported_modes(rig_file);
+        } else {
+            bitmask |= status_field_to_rigparams(field);
+        }
+    }
+    bitmask
 }
 
 fn rigparam_to_vfo_args(param: RigParamX) -> Option<(&'static str, &'static str)> {
@@ -169,9 +198,13 @@ impl HolyRigProvider {
                     Ok(ManagerMessage::InitialState { rigs }) => {
                         for (device_id, rig_type) in &rigs {
                             if let Some(interpreter) = resources.rigs.get(rig_type) {
-                                let modes = compute_supported_modes(interpreter.rig_file());
+                                let rig_file = interpreter.rig_file();
+                                let modes = compute_supported_modes(rig_file);
+                                let readable = compute_readable_params(rig_file);
                                 if let Some(status) = statuses_clone.get(*device_id) {
-                                    status.write().supported_modes = modes;
+                                    let mut status = status.write();
+                                    status.supported_modes = modes;
+                                    status.readable_params = readable;
                                 }
                             }
                         }
@@ -255,16 +288,7 @@ impl RigControl for HolyRigControl {
     }
 
     fn readable_params(&self) -> i32 {
-        // TODO: Get the readable values from the rig file
-        (RigParamX::FreqA as i32)
-            | (RigParamX::FreqB as i32)
-            | (RigParamX::Pitch as i32)
-            | (RigParamX::CwU as i32) // mode bits indicate mode is readable
-            | (RigParamX::RitOn as i32)
-            | (RigParamX::XitOn as i32)
-            | (RigParamX::Rx as i32)
-            | (RigParamX::SplitOn as i32)
-            | (RigParamX::VfoA as i32)
+        self.status.read().readable_params
     }
 
     fn writeable_params(&self) -> i32 {
