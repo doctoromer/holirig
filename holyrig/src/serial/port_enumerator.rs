@@ -16,21 +16,19 @@ pub async fn run(gui_sender: mpsc::Sender<GuiMessage>) -> Result<(), PortEnumera
     loop {
         let ports = serialport::available_ports()?
             .into_iter()
-            .map(|p| {
-                let display_name = match &p.port_type {
-                    serialport::SerialPortType::UsbPort(usb) => {
-                        if let Some(product) = &usb.product {
-                            format!("{} ({})", p.port_name, product)
-                        } else {
-                            p.port_name.clone()
-                        }
-                    }
-                    _ => p.port_name.clone(),
-                };
-                SerialPortEntry {
-                    port_name: p.port_name,
-                    display_name,
+            .filter_map(|p| match &p.port_type {
+                serialport::SerialPortType::UsbPort(usb) => {
+                    let display_name = if let Some(product) = &usb.product {
+                        format!("{} ({})", p.port_name, product)
+                    } else {
+                        p.port_name.clone()
+                    };
+                    Some(SerialPortEntry {
+                        port_name: p.port_name,
+                        display_name,
+                    })
                 }
+                _ => None,
             })
             .collect();
 
