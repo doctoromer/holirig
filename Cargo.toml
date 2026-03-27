@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["auto-dispatch", "holyrig", "omnirig", "rig-test"]
-exclude = ["com-example"]
+exclude = []
 
 [workspace.dependencies]
 tracing = "0.1"
