@@ -2,13 +2,10 @@ use anyhow::Result;
 use eframe::egui;
 use holyrig::interfaces::jsonrpc::JsonRpcServer;
 use holyrig::resources::{ResourceError, Resources};
-use holyrig::serial::port_enumerator::PortEnumeratorError;
-use tokio::sync::mpsc;
 
 use holyrig::interfaces::{rigctld, udp_server};
 use holyrig::{gui, serial};
 
-use gui::GuiMessage;
 use serial::manager::DeviceManager;
 
 #[tokio::main]
@@ -33,11 +30,10 @@ async fn main() -> Result<()> {
         }
     };
 
-    let (gui_sender, gui_receiver) = mpsc::channel::<GuiMessage>(10);
-    let mut device_manager: DeviceManager =
-        DeviceManager::new(resources.clone(), gui_sender.clone());
+    let mut device_manager: DeviceManager = DeviceManager::new(resources.clone());
 
     let gui_command_sender = device_manager.sender();
+    let gui_message_receiver = device_manager.receiver();
     let udp_command_sender = device_manager.sender();
     let rigctld_command_sender = device_manager.sender();
     let udp_message_receiver = device_manager.receiver();
@@ -90,20 +86,6 @@ async fn main() -> Result<()> {
         }
     });
 
-    let port_gui_sender = gui_sender.clone();
-    tokio::spawn(async move {
-        if let Err(err) = serial::port_enumerator::run(port_gui_sender).await {
-            match err {
-                PortEnumeratorError::Enumeration(err) => {
-                    eprintln!("{}", err.description);
-                }
-                PortEnumeratorError::Send(_) => {
-                    eprintln!("Failed to send ports to GUI task");
-                }
-            }
-        }
-    });
-
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([450.0, 440.0])
@@ -115,7 +97,7 @@ async fn main() -> Result<()> {
         options,
         Box::new(|_| {
             Ok(Box::new(gui::App::new(
-                gui_receiver,
+                gui_message_receiver,
                 gui_command_sender,
                 resources.rigs.keys().cloned().collect(),
             )))

@@ -111,8 +111,8 @@ pub async fn run_server(
                 let (mut udp_response, device_id) = match response? {
                     ManagerMessage::InitialState { rigs } => {
                         let mut response = "Available rigs:".to_string();
-                        for (device_id, rig_file_name) in rigs {
-                            response.push_str(format!("{device_id}: {rig_file_name}\n").as_str());
+                        for rig in &rigs {
+                            response.push_str(format!("{}: {}\n", rig.id, rig.rig_type).as_str());
                         }
                         (response, None)
                     },
@@ -129,6 +129,9 @@ pub async fn run_server(
                             .collect();
 
                         (format!("Device {device_id} status update:\n{}\n", formatted_values.join("\n")), Some(device_id))
+                    }
+                    ManagerMessage::DeviceError { .. } | ManagerMessage::AvailablePorts(_) => {
+                        continue;
                     }
                 };
                 udp_response.push('\n');

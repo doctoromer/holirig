@@ -196,12 +196,12 @@ impl HolyRigProvider {
                         break;
                     }
                     Ok(ManagerMessage::InitialState { rigs }) => {
-                        for (device_id, rig_type) in &rigs {
-                            if let Some(interpreter) = resources.rigs.get(rig_type) {
+                        for rig in &rigs {
+                            if let Some(interpreter) = resources.rigs.get(&rig.rig_type) {
                                 let rig_file = interpreter.rig_file();
                                 let modes = compute_supported_modes(rig_file);
                                 let readable = compute_readable_params(rig_file);
-                                if let Some(status) = statuses_clone.get(*device_id) {
+                                if let Some(status) = statuses_clone.get(rig.id) {
                                     let mut status = status.write();
                                     status.supported_modes = modes;
                                     status.readable_params = readable;
@@ -209,6 +209,7 @@ impl HolyRigProvider {
                             }
                         }
                     }
+                    Ok(ManagerMessage::DeviceError { .. } | ManagerMessage::AvailablePorts(_)) => {}
                 }
             }
         });

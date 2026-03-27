@@ -1,6 +1,7 @@
 use crate::{
     rig_settings::{BaudRate, DataBits, RigSettings, StopBits},
     serial::ManagerCommand,
+    serial::manager::{ManagerMessage, SerialPortEntry},
 };
 use eframe::egui;
 use egui::{ComboBox, Grid, Ui};
@@ -9,26 +10,13 @@ use egui_dock::{
     tab_viewer::OnCloseResponse,
 };
 use std::collections::HashMap;
-use tokio::sync::mpsc::{Receiver, Sender};
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct SerialPortEntry {
-    pub port_name: String,
-    pub display_name: String,
-}
+use tokio::sync::broadcast;
+use tokio::sync::mpsc::Sender;
 
 pub enum PortStatus {
     Disconnected,
     Connected,
     Error(String),
-}
-
-pub enum GuiMessage {
-    InitialState(Vec<RigSettings>),
-    AvailablePorts(Vec<SerialPortEntry>),
-    DeviceConnected { device_id: usize },
-    DeviceDisconnected { device_id: usize },
-    DeviceError { device_id: usize, error: String },
 }
 
 struct AppTabViewer<'a> {
@@ -336,18 +324,18 @@ impl AppTabs {
 }
 
 pub struct App {
-    gui_receiver: Receiver<GuiMessage>,
+    message_receiver: broadcast::Receiver<ManagerMessage>,
     tabs: AppTabs,
 }
 
 impl App {
     pub fn new(
-        gui_receiver: Receiver<GuiMessage>,
+        message_receiver: broadcast::Receiver<ManagerMessage>,
         serial_sender: Sender<ManagerCommand>,
         rig_types: Vec<String>,
     ) -> Self {
         App {
-            gui_receiver,
+            message_receiver,
             tabs: AppTabs::new(serial_sender, rig_types),
         }
     }
@@ -355,29 +343,34 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        while let Ok(message) = self.gui_receiver.try_recv() {
-            match message {
-                GuiMessage::InitialState(settings) => {
-                    self.tabs.set_tabs(settings);
-                }
-                GuiMessage::AvailablePorts(ports) => {
-                    self.tabs.available_ports = ports;
-                }
-                GuiMessage::DeviceConnected { device_id } => {
-                    self.tabs
-                        .device_status
-                        .insert(device_id, PortStatus::Connected);
-                }
-                GuiMessage::DeviceDisconnected { device_id } => {
-                    self.tabs
-                        .device_status
-                        .insert(device_id, PortStatus::Disconnected);
-                }
-                GuiMessage::DeviceError { device_id, error } => {
-                    self.tabs
-                        .device_status
-                        .insert(device_id, PortStatus::Error(error));
-                }
+        loop {
+            match self.message_receiver.try_recv() {
+                Ok(message) => match message {
+                    ManagerMessage::InitialState { rigs } => {
+                        self.tabs.set_tabs(rigs);
+                    }
+                    ManagerMessage::AvailablePorts(ports) => {
+                        self.tabs.available_ports = ports;
+                    }
+                    ManagerMessage::DeviceConnected { device_id, .. } => {
+                        self.tabs
+                            .device_status
+                            .insert(device_id, PortStatus::Connected);
+                    }
+                    ManagerMessage::DeviceDisconnected { device_id } => {
+                        self.tabs
+                            .device_status
+                            .insert(device_id, PortStatus::Disconnected);
+                    }
+                    ManagerMessage::DeviceError { device_id, error } => {
+                        self.tabs
+                            .device_status
+                            .insert(device_id, PortStatus::Error(error));
+                    }
+                    ManagerMessage::StatusUpdate { .. } => {}
+                },
+                Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(_) => break,
             }
         }
 

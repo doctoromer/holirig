@@ -174,7 +174,7 @@ impl JsonRpcServer {
             ManagerMessage::InitialState { rigs } => {
                 *self.rigs_state.write() = rigs
                     .iter()
-                    .map(|(device_id, rig_model)| (*device_id, (rig_model.clone(), false)))
+                    .map(|rig| (rig.id, (rig.rig_type.clone(), false)))
                     .collect();
             }
             ManagerMessage::DeviceConnected {
@@ -191,6 +191,7 @@ impl JsonRpcServer {
                         *is_connected = false;
                     });
             }
+            ManagerMessage::DeviceError { .. } | ManagerMessage::AvailablePorts(_) => {}
             ManagerMessage::StatusUpdate { device_id, values } => {
                 let values: HashMap<_, _> = values
                     .into_iter()

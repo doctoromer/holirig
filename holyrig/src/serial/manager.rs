@@ -6,12 +6,17 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time::{Duration, sleep};
 
-use crate::gui::GuiMessage;
 use crate::resources::Resources;
 use crate::rig_settings::{RigSettings, Settings};
 use crate::runtime::ExternalApi;
 use crate::runtime::{Interpreter, Value};
 use crate::serial::device::{DeviceCommand, DeviceMessage, SerialDevice};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SerialPortEntry {
+    pub port_name: String,
+    pub display_name: String,
+}
 
 const RIGS_FILE: &str = "rigs.toml";
 
@@ -57,8 +62,7 @@ pub enum ManagerCommand {
 #[derive(Debug, Clone)]
 pub enum ManagerMessage {
     InitialState {
-        // DeviceId, RigFile name
-        rigs: HashMap<usize, String>,
+        rigs: Vec<RigSettings>,
     },
     DeviceConnected {
         device_id: usize,
@@ -67,10 +71,15 @@ pub enum ManagerMessage {
     DeviceDisconnected {
         device_id: usize,
     },
+    DeviceError {
+        device_id: usize,
+        error: String,
+    },
     StatusUpdate {
         device_id: usize,
         values: HashMap<String, Value>,
     },
+    AvailablePorts(Vec<SerialPortEntry>),
 }
 
 pub struct DeviceManager {
@@ -90,7 +99,7 @@ pub struct DeviceManager {
     device_tx: mpsc::Sender<DeviceMessage>,
     device_rx: mpsc::Receiver<DeviceMessage>,
 
-    gui_sender: mpsc::Sender<GuiMessage>,
+    prev_ports: Vec<SerialPortEntry>,
 }
 
 #[derive(Clone)]
@@ -160,7 +169,7 @@ impl ExternalApi for DeviceExternalApi {
 }
 
 impl DeviceManager {
-    pub fn new(resources: Arc<Resources>, gui_sender: mpsc::Sender<GuiMessage>) -> Self {
+    pub fn new(resources: Arc<Resources>) -> Self {
         let (manager_command_tx, manager_command_rx) = mpsc::channel(10);
         let (device_tx, device_rx) = mpsc::channel(10);
 
@@ -185,7 +194,7 @@ impl DeviceManager {
             manager_command_rx,
             device_tx,
             device_rx,
-            gui_sender,
+            prev_ports: Vec::new(),
         }
     }
 
@@ -212,16 +221,9 @@ impl DeviceManager {
             }
         }
 
-        self.manager_message_tx.send(ManagerMessage::InitialState {
-            rigs: settings
-                .rigs
-                .iter()
-                .map(|settings| (settings.id, settings.rig_type.clone()))
-                .collect(),
-        })?;
-        self.gui_sender
-            .send(GuiMessage::InitialState(settings.rigs.clone()))
-            .await?;
+        let _ = self.manager_message_tx.send(ManagerMessage::InitialState {
+            rigs: settings.rigs.clone(),
+        });
 
         self.settings = settings;
 
@@ -238,7 +240,6 @@ impl DeviceManager {
                 let rig_model = device.settings.rig_type.clone();
                 let poll_interval = device.settings.poll_interval;
                 let manager_tx = self.manager_message_tx.clone();
-                let gui_sender = self.gui_sender.clone();
 
                 println!("[manager] Device {device_id} ({rig_model}) connected, initializing...");
 
@@ -256,9 +257,6 @@ impl DeviceManager {
                         device_id,
                         rig_model,
                     });
-                    let _ = gui_sender
-                        .send(GuiMessage::DeviceConnected { device_id })
-                        .await;
 
                     if init_result.is_err() {
                         return;
@@ -305,25 +303,12 @@ impl DeviceManager {
                 let _ = self
                     .manager_message_tx
                     .send(ManagerMessage::DeviceDisconnected { device_id });
-                let gui_sender = self.gui_sender.clone();
-                tokio::spawn(async move {
-                    let _ = gui_sender
-                        .send(GuiMessage::DeviceDisconnected { device_id })
-                        .await;
-                });
             }
             DeviceMessage::Error { device_id, error } => {
                 eprintln!("[manager] Device (id: {device_id}) failed: {error}");
-                let gui_sender = self.gui_sender.clone();
-                let error_clone = error.clone();
-                tokio::spawn(async move {
-                    let _ = gui_sender
-                        .send(GuiMessage::DeviceError {
-                            device_id,
-                            error: error_clone,
-                        })
-                        .await;
-                });
+                let _ = self
+                    .manager_message_tx
+                    .send(ManagerMessage::DeviceError { device_id, error });
             }
         }
     }
@@ -427,6 +412,8 @@ impl DeviceManager {
     pub async fn run(&mut self) -> Result<()> {
         self.load_rigs().await?;
 
+        let mut port_interval = tokio::time::interval(Duration::from_millis(500));
+
         loop {
             tokio::select! {
                 Some(device_message) = self.device_rx.recv() => {
@@ -435,7 +422,49 @@ impl DeviceManager {
                 Some(manager_command) = self.manager_command_rx.recv() => {
                     self.handle_manager_command(manager_command).await?
                 },
+                _ = port_interval.tick() => {
+                    self.poll_ports().await;
+                },
             }
+        }
+    }
+
+    async fn poll_ports(&mut self) {
+        let ports = match tokio::task::spawn_blocking(serialport::available_ports).await {
+            Ok(Ok(ports)) => ports,
+            Ok(Err(err)) => {
+                eprintln!("[manager] Failed to enumerate serial ports: {err}");
+                return;
+            }
+            Err(err) => {
+                eprintln!("[manager] Port enumeration task panicked: {err}");
+                return;
+            }
+        };
+
+        let ports: Vec<SerialPortEntry> = ports
+            .into_iter()
+            .filter_map(|p| match &p.port_type {
+                serialport::SerialPortType::UsbPort(usb) => {
+                    let display_name = if let Some(product) = &usb.product {
+                        format!("{} ({})", p.port_name, product)
+                    } else {
+                        p.port_name.clone()
+                    };
+                    Some(SerialPortEntry {
+                        port_name: p.port_name,
+                        display_name,
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+
+        if ports != self.prev_ports {
+            let _ = self
+                .manager_message_tx
+                .send(ManagerMessage::AvailablePorts(ports.clone()));
+            self.prev_ports = ports;
         }
     }
 
