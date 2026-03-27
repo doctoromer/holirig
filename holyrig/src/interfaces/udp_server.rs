@@ -109,13 +109,6 @@ pub async fn run_server(
             },
             response = message_receiver.recv() => {
                 let (mut udp_response, device_id) = match response? {
-                    ManagerMessage::InitialState { rigs } => {
-                        let mut response = "Available rigs:".to_string();
-                        for rig in &rigs {
-                            response.push_str(format!("{}: {}\n", rig.id, rig.rig_type).as_str());
-                        }
-                        (response, None)
-                    },
                     ManagerMessage::DeviceConnected { device_id, rig_model: _ } => {
                         (format!("Device {device_id} connected"), Some(device_id))
                     },

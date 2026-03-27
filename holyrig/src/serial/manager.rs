@@ -61,9 +61,6 @@ pub enum ManagerCommand {
 
 #[derive(Debug, Clone)]
 pub enum ManagerMessage {
-    InitialState {
-        rigs: Vec<RigSettings>,
-    },
     DeviceConnected {
         device_id: usize,
         rig_model: String,
@@ -184,10 +181,20 @@ impl DeviceManager {
                 .unwrap_or_else(|e| eprintln!("Failed to create data directory: {}", e));
         }
 
+        let settings_path = data_dir.join(RIGS_FILE);
+        let settings = if !settings_path.exists() {
+            Settings::default()
+        } else {
+            std::fs::read_to_string(&settings_path)
+                .ok()
+                .and_then(|content| toml::from_str(&content).ok())
+                .unwrap_or_default()
+        };
+
         Self {
             resources,
             devices: HashMap::new(),
-            settings: Default::default(),
+            settings,
             data_dir,
             manager_message_tx,
             manager_command_tx,
@@ -198,6 +205,10 @@ impl DeviceManager {
         }
     }
 
+    pub fn initial_rigs(&self) -> &[RigSettings] {
+        &self.settings.rigs
+    }
+
     pub fn receiver(&self) -> broadcast::Receiver<ManagerMessage> {
         self.manager_message_tx.subscribe()
     }
@@ -206,28 +217,12 @@ impl DeviceManager {
         self.manager_command_tx.clone()
     }
 
-    pub async fn load_rigs(&mut self) -> Result<()> {
-        let settings_path = self.data_dir.join(RIGS_FILE);
-        let settings = if !settings_path.exists() {
-            Settings::default()
-        } else {
-            let content = std::fs::read_to_string(&settings_path)?;
-            toml::from_str(&content)?
-        };
-
-        for (rig_id, settings) in settings.rigs.iter().enumerate() {
+    async fn start_devices(&mut self) {
+        for (rig_id, settings) in self.settings.rigs.clone().iter().enumerate() {
             if let Err(err) = self.add_device(rig_id, settings.clone()).await {
                 eprintln!("Failed to load rig {rig_id}: {err}");
             }
         }
-
-        let _ = self.manager_message_tx.send(ManagerMessage::InitialState {
-            rigs: settings.rigs.clone(),
-        });
-
-        self.settings = settings;
-
-        Ok(())
     }
 
     fn handle_device_message(&mut self, device_message: DeviceMessage) {
@@ -410,7 +405,7 @@ impl DeviceManager {
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        self.load_rigs().await?;
+        self.start_devices().await;
 
         let mut port_interval = tokio::time::interval(Duration::from_millis(500));
 

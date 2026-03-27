@@ -32,6 +32,7 @@ async fn main() -> Result<()> {
 
     let mut device_manager: DeviceManager = DeviceManager::new(resources.clone());
 
+    let initial_rigs = device_manager.initial_rigs();
     let gui_command_sender = device_manager.sender();
     let gui_message_receiver = device_manager.receiver();
     let udp_command_sender = device_manager.sender();
@@ -47,6 +48,7 @@ async fn main() -> Result<()> {
             device_manager.receiver(),
             resources.clone(),
             tokio::runtime::Handle::current(),
+            initial_rigs,
         );
         println!("Starting OmniRig server");
         omnirig::spawn_omnirig_server(provider).expect("Failed to start OmniRig COM server")
@@ -60,10 +62,12 @@ async fn main() -> Result<()> {
         resources.clone(),
         jsonrpc_command_sender,
         jsonrpc_command_receiver,
+        initial_rigs,
     )?;
 
     tokio::spawn(async move { jsonrpc_server.run().await });
 
+    let initial_rigs = initial_rigs.to_vec();
     tokio::spawn(async move {
         let result = device_manager.run().await;
         println!("Manager exited with: {result:?}");
@@ -100,6 +104,7 @@ async fn main() -> Result<()> {
                 gui_message_receiver,
                 gui_command_sender,
                 resources.rigs.keys().cloned().collect(),
+                initial_rigs,
             )))
         }),
     )

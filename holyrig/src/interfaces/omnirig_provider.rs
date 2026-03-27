@@ -7,6 +7,7 @@ use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::Sender;
 
 use crate::resources::Resources;
+use crate::rig_settings::RigSettings;
 use crate::runtime::RigFile;
 use crate::runtime::Value;
 use crate::serial::ManagerCommand;
@@ -149,11 +150,25 @@ impl HolyRigProvider {
         mut message_receiver: Receiver<ManagerMessage>,
         resources: Arc<Resources>,
         tokio_runtime: tokio::runtime::Handle,
+        initial_rigs: &[RigSettings],
     ) -> Self {
         let statuses = [
             Arc::new(RwLock::new(CachedStatus::default())),
             Arc::new(RwLock::new(CachedStatus::default())),
         ];
+
+        for rig in initial_rigs {
+            if let Some(interpreter) = resources.rigs.get(&rig.rig_type) {
+                let rig_file = interpreter.rig_file();
+                let modes = compute_supported_modes(rig_file);
+                let readable = compute_readable_params(rig_file);
+                if let Some(status) = statuses.get(rig.id) {
+                    let mut status = status.write();
+                    status.supported_modes = modes;
+                    status.readable_params = readable;
+                }
+            }
+        }
 
         let statuses_clone = statuses.clone();
         tokio_runtime.spawn(async move {
@@ -194,20 +209,6 @@ impl HolyRigProvider {
                     Err(err) => {
                         eprintln!("Omnirig recv error: {err}");
                         break;
-                    }
-                    Ok(ManagerMessage::InitialState { rigs }) => {
-                        for rig in &rigs {
-                            if let Some(interpreter) = resources.rigs.get(&rig.rig_type) {
-                                let rig_file = interpreter.rig_file();
-                                let modes = compute_supported_modes(rig_file);
-                                let readable = compute_readable_params(rig_file);
-                                if let Some(status) = statuses_clone.get(rig.id) {
-                                    let mut status = status.write();
-                                    status.supported_modes = modes;
-                                    status.readable_params = readable;
-                                }
-                            }
-                        }
                     }
                     Ok(ManagerMessage::DeviceError { .. } | ManagerMessage::AvailablePorts(_)) => {}
                 }

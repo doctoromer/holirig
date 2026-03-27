@@ -10,6 +10,7 @@ use tokio::sync::{broadcast, mpsc};
 use super::{Notification, RigRpcHandler};
 use crate::interfaces::jsonrpc::{Request, Response, RpcError};
 use crate::resources::Resources;
+use crate::rig_settings::RigSettings;
 use crate::serial::manager::{ManagerCommand, ManagerMessage};
 
 type Subscriptions = HashMap<(usize, SocketAddr), Vec<String>>;
@@ -30,6 +31,7 @@ impl JsonRpcServer {
         resources: Arc<Resources>,
         command_tx: mpsc::Sender<ManagerCommand>,
         manager_rx: broadcast::Receiver<ManagerMessage>,
+        initial_rigs: &[RigSettings],
     ) -> Result<Self> {
         let handlers = resources
             .rigs
@@ -42,11 +44,16 @@ impl JsonRpcServer {
             })
             .collect();
 
+        let rigs_state: HashMap<usize, (String, bool)> = initial_rigs
+            .iter()
+            .map(|rig| (rig.id, (rig.rig_type.clone(), false)))
+            .collect();
+
         Ok(Self {
             bind_address: bind_address.to_string(),
             port,
             handlers: Arc::new(handlers),
-            rigs_state: Arc::new(RwLock::new(HashMap::new())),
+            rigs_state: Arc::new(RwLock::new(rigs_state)),
             registered_status: Arc::new(RwLock::new(HashMap::new())),
             manager_rx,
         })
@@ -171,12 +178,6 @@ impl JsonRpcServer {
         socket: &UdpSocket,
     ) -> Result<()> {
         match message {
-            ManagerMessage::InitialState { rigs } => {
-                *self.rigs_state.write() = rigs
-                    .iter()
-                    .map(|rig| (rig.id, (rig.rig_type.clone(), false)))
-                    .collect();
-            }
             ManagerMessage::DeviceConnected {
                 device_id,
                 rig_model,

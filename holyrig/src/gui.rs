@@ -333,10 +333,13 @@ impl App {
         message_receiver: broadcast::Receiver<ManagerMessage>,
         serial_sender: Sender<ManagerCommand>,
         rig_types: Vec<String>,
+        initial_rigs: Vec<RigSettings>,
     ) -> Self {
+        let mut tabs = AppTabs::new(serial_sender, rig_types);
+        tabs.set_tabs(initial_rigs);
         App {
             message_receiver,
-            tabs: AppTabs::new(serial_sender, rig_types),
+            tabs,
         }
     }
 }
@@ -346,9 +349,6 @@ impl eframe::App for App {
         loop {
             match self.message_receiver.try_recv() {
                 Ok(message) => match message {
-                    ManagerMessage::InitialState { rigs } => {
-                        self.tabs.set_tabs(rigs);
-                    }
                     ManagerMessage::AvailablePorts(ports) => {
                         self.tabs.available_ports = ports;
                     }
