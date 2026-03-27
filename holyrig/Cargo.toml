@@ -35,6 +35,9 @@ serialport = "4.7.0"
 tokio-serial = "5.4.4"
 toml = "0.8.20"
 thiserror = "2.0.18"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 omnirig = { path = "../omnirig" }
