@@ -10,6 +10,8 @@ use windows::Win32::System::Com::{
 use windows::core::{GUID, IUnknown, Interface, implement};
 use windows_core::{BOOL, HRESULT, interface};
 
+use tracing::{debug, trace};
+
 use crate::provider::OmniRigProvider;
 use crate::rig::{IRigX, RigX};
 use auto_dispatch::auto_dispatch;
@@ -49,21 +51,21 @@ impl OmniRigX {
     #[id(0x01)]
     #[getter]
     fn InterfaceVersion(&self) -> Result<i32, HRESULT> {
-        println!("OmniRigX::InterfaceVersion getter called");
+        trace!("OmniRigX::InterfaceVersion getter called");
         Ok(0x101)
     }
 
     #[id(0x02)]
     #[getter]
     fn SoftwareVersion(&self) -> Result<i32, HRESULT> {
-        println!("OmniRigX::SoftwareVersion getter called");
+        trace!("OmniRigX::SoftwareVersion getter called");
         Ok(0x10014)
     }
 
     #[id(0x03)]
     #[getter]
     fn Rig1(&self) -> Result<IDispatch, HRESULT> {
-        println!("OmniRigX::Rig1 getter called");
+        trace!("OmniRigX::Rig1 getter called");
         let rig = self
             .rig1
             .read()
@@ -77,7 +79,7 @@ impl OmniRigX {
     #[id(0x04)]
     #[getter]
     fn Rig2(&self) -> Result<IDispatch, HRESULT> {
-        println!("OmniRigX::Rig2 getter called");
+        trace!("OmniRigX::Rig2 getter called");
         let rig = self
             .rig2
             .read()
@@ -91,17 +93,14 @@ impl OmniRigX {
     #[id(0x05)]
     #[getter]
     fn DialogVisible(&self) -> Result<bool, HRESULT> {
-        println!("OmniRigX::DialogVisible getter called");
+        trace!("OmniRigX::DialogVisible getter called");
         Ok(*self.dialog_visible.read().unwrap())
     }
 
     #[id(0x05)]
     #[setter]
     fn DialogVisible(&self, value: bool) -> Result<(), HRESULT> {
-        println!(
-            "OmniRigX::DialogVisible setter called with value: {}",
-            value
-        );
+        trace!(value, "OmniRigX::DialogVisible setter called");
         *self.dialog_visible.write().unwrap() = value;
         Ok(())
     }
@@ -177,7 +176,7 @@ impl IClassFactory_Impl for OmniRigXFactory_Impl {
                 return Err(E_NOINTERFACE.into());
             }
 
-            println!("OmniRigXFactory: Creating new OmniRigX instance");
+            debug!("OmniRigXFactory: Creating new OmniRigX instance");
             let instance: IOmniRigX = OmniRigX::from_provider(self.provider.as_ref()).into();
             *ppvobject = std::mem::transmute_copy(&instance);
             std::mem::forget(instance);

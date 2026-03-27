@@ -5,6 +5,8 @@ use windows::Win32::System::Com::{IDispatch, IDispatch_Impl, IDispatch_Vtbl};
 use windows::core::implement;
 use windows_core::{HRESULT, interface};
 
+use tracing::trace;
+
 use auto_dispatch::auto_dispatch;
 
 use crate::provider::PortBitsControl;
@@ -36,21 +38,21 @@ impl PortBits {
 impl PortBits {
     #[id(0x01)]
     fn Lock(&self) -> Result<bool, HRESULT> {
-        println!("PortBits::Lock() called");
+        trace!("PortBits::Lock called");
         Ok(self.inner.lock())
     }
 
     #[id(0x02)]
     #[getter]
     fn Rts(&self) -> Result<bool, HRESULT> {
-        println!("PortBits::Rts getter called");
+        trace!("PortBits::Rts getter called");
         Ok(self.inner.rts())
     }
 
     #[id(0x02)]
     #[setter]
     fn Rts(&self, value: bool) -> Result<(), HRESULT> {
-        println!("PortBits::Rts setter called with value: {}", value);
+        trace!(value, "PortBits::Rts setter called");
         self.inner.set_rts(value);
         Ok(())
     }
@@ -58,14 +60,14 @@ impl PortBits {
     #[id(0x03)]
     #[getter]
     fn Dtr(&self) -> Result<bool, HRESULT> {
-        println!("PortBits::Dtr getter called");
+        trace!("PortBits::Dtr getter called");
         Ok(self.inner.dtr())
     }
 
     #[id(0x03)]
     #[setter]
     fn Dtr(&self, value: bool) -> Result<(), HRESULT> {
-        println!("PortBits::Dtr setter called with value: {}", value);
+        trace!(value, "PortBits::Dtr setter called");
         self.inner.set_dtr(value);
         Ok(())
     }
@@ -73,20 +75,20 @@ impl PortBits {
     #[id(0x04)]
     #[getter]
     fn Cts(&self) -> Result<bool, HRESULT> {
-        println!("PortBits::Cts getter called");
+        trace!("PortBits::Cts getter called");
         Ok(self.inner.cts())
     }
 
     #[id(0x05)]
     #[getter]
     fn Dsr(&self) -> Result<bool, HRESULT> {
-        println!("PortBits::Dsr getter called");
+        trace!("PortBits::Dsr getter called");
         Ok(self.inner.dsr())
     }
 
     #[id(0x06)]
     fn Unlock(&self) -> Result<(), HRESULT> {
-        println!("PortBits::Unlock() called");
+        trace!("PortBits::Unlock called");
         self.inner.unlock();
         Ok(())
     }

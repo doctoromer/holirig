@@ -112,7 +112,7 @@ pub fn register_com_component(
     prog_id: &str,
     version: &str,
 ) -> Result<()> {
-    println!("Registering COM component {{{:?}}}", clsid);
+    tracing::info!("Registering COM component {{{:?}}}", clsid);
     register_com_component_with_access(clsid, exe_path, prog_id, version, REG_SAM_FLAGS(0))?;
     register_com_component_with_access(clsid, exe_path, prog_id, version, KEY_WOW64_32KEY)?;
     Ok(())

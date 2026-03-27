@@ -7,6 +7,8 @@ use windows::Win32::System::Variant::{VARIANT, VariantGetElementCount, VariantTo
 use windows::core::{BSTR, implement};
 use windows_core::{HRESULT, Interface, interface};
 
+use tracing::trace;
+
 use crate::enums::RigParamX;
 use crate::port_bits::{IPortBits, PortBits};
 use crate::provider::RigControl;
@@ -95,54 +97,54 @@ impl RigX {
     #[id(0x01)]
     #[getter]
     fn RigType(&self) -> Result<BSTR, HRESULT> {
-        println!("RigX::RigType getter called");
+        trace!("RigX::RigType getter called");
         Ok(BSTR::from(self.inner.rig_type()))
     }
 
     #[id(0x02)]
     #[getter]
     fn ReadableParams(&self) -> Result<i32, HRESULT> {
-        println!("RigX::ReadableParams getter called");
+        trace!("RigX::ReadableParams getter called");
         Ok(self.inner.readable_params())
     }
 
     #[id(0x03)]
     #[getter]
     fn WriteableParams(&self) -> Result<i32, HRESULT> {
-        println!("RigX::WriteableParams getter called");
+        trace!("RigX::WriteableParams getter called");
         Ok(self.inner.writeable_params())
     }
 
     #[id(0x04)]
     fn IsParamReadable(&self, param: i32) -> Result<bool, HRESULT> {
-        println!("RigX::IsParamReadable called with param: {}", param);
+        trace!(param, "RigX::IsParamReadable called");
         Ok((self.inner.readable_params() & param) != 0)
     }
 
     #[id(0x05)]
     fn IsParamWriteable(&self, param: i32) -> Result<bool, HRESULT> {
-        println!("RigX::IsParamWriteable called with param: {}", param);
+        trace!(param, "RigX::IsParamWriteable called");
         Ok((self.inner.writeable_params() & param) != 0)
     }
 
     #[id(0x07)]
     #[getter]
     fn StatusStr(&self) -> Result<BSTR, HRESULT> {
-        println!("RigX::StatusStr getter called");
+        trace!("RigX::StatusStr getter called");
         Ok(BSTR::from(self.inner.status_str()))
     }
 
     #[id(0x08)]
     #[getter]
     fn Freq(&self) -> Result<i32, HRESULT> {
-        println!("RigX::Freq getter called");
+        trace!("RigX::Freq getter called");
         Ok(self.inner.freq())
     }
 
     #[id(0x08)]
     #[setter]
     fn Freq(&self, value: i32) -> Result<(), HRESULT> {
-        println!("RigX::Freq setter called with value: {}", value);
+        trace!(value, "RigX::Freq setter called");
         self.inner.set_freq(value);
         Ok(())
     }
@@ -150,14 +152,14 @@ impl RigX {
     #[id(0x09)]
     #[getter]
     fn FreqA(&self) -> Result<i32, HRESULT> {
-        println!("RigX::FreqA getter called");
+        trace!("RigX::FreqA getter called");
         Ok(self.inner.freq_a())
     }
 
     #[id(0x09)]
     #[setter]
     fn FreqA(&self, value: i32) -> Result<(), HRESULT> {
-        println!("RigX::FreqA setter called with value: {}", value);
+        trace!(value, "RigX::FreqA setter called");
         self.inner.set_freq_a(value);
         Ok(())
     }
@@ -165,14 +167,14 @@ impl RigX {
     #[id(0x0A)]
     #[getter]
     fn FreqB(&self) -> Result<i32, HRESULT> {
-        println!("RigX::FreqB getter called");
+        trace!("RigX::FreqB getter called");
         Ok(self.inner.freq_b())
     }
 
     #[id(0x0A)]
     #[setter]
     fn FreqB(&self, value: i32) -> Result<(), HRESULT> {
-        println!("RigX::FreqB setter called with value: {}", value);
+        trace!(value, "RigX::FreqB setter called");
         self.inner.set_freq_b(value);
         Ok(())
     }
@@ -180,14 +182,14 @@ impl RigX {
     #[id(0x0B)]
     #[getter]
     fn RitOffset(&self) -> Result<i32, HRESULT> {
-        println!("RigX::RitOffset getter called");
+        trace!("RigX::RitOffset getter called");
         Ok(self.inner.rit_offset())
     }
 
     #[id(0x0B)]
     #[setter]
     fn RitOffset(&self, value: i32) -> Result<(), HRESULT> {
-        println!("RigX::RitOffset setter called with value: {}", value);
+        trace!(value, "RigX::RitOffset setter called");
         self.inner.set_rit_offset(value);
         Ok(())
     }
@@ -195,14 +197,14 @@ impl RigX {
     #[id(0x0C)]
     #[getter]
     fn Pitch(&self) -> Result<i32, HRESULT> {
-        println!("RigX::Pitch getter called");
+        trace!("RigX::Pitch getter called");
         Ok(self.inner.pitch())
     }
 
     #[id(0x0C)]
     #[setter]
     fn Pitch(&self, value: i32) -> Result<(), HRESULT> {
-        println!("RigX::Pitch setter called with value: {}", value);
+        trace!(value, "RigX::Pitch setter called");
         self.inner.set_pitch(value);
         Ok(())
     }
@@ -210,14 +212,14 @@ impl RigX {
     #[id(0x0D)]
     #[getter]
     fn Vfo(&self) -> Result<i32, HRESULT> {
-        println!("RigX::Vfo getter called");
+        trace!("RigX::Vfo getter called");
         Ok(self.inner.vfo().into())
     }
 
     #[id(0x0D)]
     #[setter]
     fn Vfo(&self, value: i32) -> Result<(), HRESULT> {
-        println!("RigX::Vfo setter called with value: {}", value);
+        trace!(value, "RigX::Vfo setter called");
         self.inner.set_vfo(RigParamX::from(value));
         Ok(())
     }
@@ -225,14 +227,14 @@ impl RigX {
     #[id(0x0E)]
     #[getter]
     fn Split(&self) -> Result<i32, HRESULT> {
-        println!("RigX::Split getter called");
+        trace!("RigX::Split getter called");
         Ok(self.inner.split().into())
     }
 
     #[id(0x0E)]
     #[setter]
     fn Split(&self, value: i32) -> Result<(), HRESULT> {
-        println!("RigX::Split setter called with value: {}", value);
+        trace!(value, "RigX::Split setter called");
         self.inner.set_split(RigParamX::from(value));
         Ok(())
     }
@@ -240,14 +242,14 @@ impl RigX {
     #[id(0x0F)]
     #[getter]
     fn Rit(&self) -> Result<i32, HRESULT> {
-        println!("RigX::Rit getter called");
+        trace!("RigX::Rit getter called");
         Ok(self.inner.rit().into())
     }
 
     #[id(0x0F)]
     #[setter]
     fn Rit(&self, value: i32) -> Result<(), HRESULT> {
-        println!("RigX::Rit setter called with value: {}", value);
+        trace!(value, "RigX::Rit setter called");
         self.inner.set_rit(RigParamX::from(value));
         Ok(())
     }
@@ -255,14 +257,14 @@ impl RigX {
     #[id(0x10)]
     #[getter]
     fn Xit(&self) -> Result<i32, HRESULT> {
-        println!("RigX::Xit getter called");
+        trace!("RigX::Xit getter called");
         Ok(self.inner.xit().into())
     }
 
     #[id(0x10)]
     #[setter]
     fn Xit(&self, value: i32) -> Result<(), HRESULT> {
-        println!("RigX::Xit setter called with value: {}", value);
+        trace!(value, "RigX::Xit setter called");
         self.inner.set_xit(RigParamX::from(value));
         Ok(())
     }
@@ -270,14 +272,14 @@ impl RigX {
     #[id(0x11)]
     #[getter]
     fn Tx(&self) -> Result<i32, HRESULT> {
-        println!("RigX::Tx getter called");
+        trace!("RigX::Tx getter called");
         Ok(self.inner.tx().into())
     }
 
     #[id(0x11)]
     #[setter]
     fn Tx(&self, value: i32) -> Result<(), HRESULT> {
-        println!("RigX::Tx setter called with value: {}", value);
+        trace!(value, "RigX::Tx setter called");
         self.inner.set_tx(RigParamX::from(value));
         Ok(())
     }
@@ -285,14 +287,14 @@ impl RigX {
     #[id(0x12)]
     #[getter]
     fn Mode(&self) -> Result<i32, HRESULT> {
-        println!("RigX::Mode getter called");
+        trace!("RigX::Mode getter called");
         Ok(self.inner.mode().into())
     }
 
     #[id(0x12)]
     #[setter]
     fn Mode(&self, value: i32) -> Result<(), HRESULT> {
-        println!("RigX::Mode setter called with value: {}", value);
+        trace!(value, "RigX::Mode setter called");
         self.inner.set_mode(RigParamX::from(value));
         Ok(())
     }
@@ -300,20 +302,20 @@ impl RigX {
     #[id(0x06)]
     #[getter]
     fn Status(&self) -> Result<i32, HRESULT> {
-        println!("RigX::Status getter called");
+        trace!("RigX::Status getter called");
         Ok(self.inner.status().into())
     }
 
     #[id(0x13)]
     fn ClearRit(&self) -> Result<(), HRESULT> {
-        println!("RigX::ClearRit called");
+        trace!("RigX::ClearRit called");
         self.inner.set_rit_offset(0);
         Ok(())
     }
 
     #[id(0x14)]
     fn SetSimplexMode(&self, freq: i32) -> Result<(), HRESULT> {
-        println!("RigX::SetSimplexMode called with freq: {}", freq);
+        trace!(freq, "RigX::SetSimplexMode called");
         self.inner.set_freq(freq);
         self.inner.set_freq_a(freq);
         self.inner.set_freq_b(freq);
@@ -325,10 +327,7 @@ impl RigX {
 
     #[id(0x15)]
     fn SetSplitMode(&self, rx_freq: i32, tx_freq: i32) -> Result<(), HRESULT> {
-        println!(
-            "RigX::SetSplitMode called with rx_freq: {}, tx_freq: {}",
-            rx_freq, tx_freq
-        );
+        trace!(rx_freq, tx_freq, "RigX::SetSplitMode called");
         self.inner.set_freq_a(rx_freq);
         self.inner.set_freq_b(tx_freq);
         self.inner.set_split(RigParamX::SplitOn);
@@ -339,7 +338,7 @@ impl RigX {
 
     #[id(0x16)]
     fn FrequencyOfTone(&self, tone: i32) -> Result<i32, HRESULT> {
-        println!("RigX::FrequencyOfTone called with tone: {}", tone);
+        trace!(tone, "RigX::FrequencyOfTone called");
         let mode = self.inner.mode();
         let mut result = tone;
         if mode == RigParamX::CwU || mode == RigParamX::CwL {
@@ -359,7 +358,7 @@ impl RigX {
         reply_length: i32,
         reply_end: VARIANT,
     ) -> Result<(), HRESULT> {
-        println!("RigX::SendCustomCommand called with reply_length: {reply_length}");
+        trace!(reply_length, "RigX::SendCustomCommand called");
         let command_bytes = variant_to_bytes(&command)?;
         let reply_end_bytes = variant_to_bytes(&reply_end)?;
         self.inner
@@ -369,7 +368,7 @@ impl RigX {
 
     #[id(0x18)]
     fn GetRxFrequency(&self) -> Result<i32, HRESULT> {
-        println!("RigX::GetRxFrequency called");
+        trace!("RigX::GetRxFrequency called");
         let vfo = self.inner.vfo();
 
         let mut result = match vfo {
@@ -392,7 +391,7 @@ impl RigX {
 
     #[id(0x19)]
     fn GetTxFrequency(&self) -> Result<i32, HRESULT> {
-        println!("RigX::GetTxFrequency called");
+        trace!("RigX::GetTxFrequency called");
         let vfo = self.inner.vfo();
         let split = self.inner.split();
 
@@ -421,7 +420,7 @@ impl RigX {
     #[id(0x1A)]
     #[getter]
     fn PortBits(&self) -> Result<IDispatch, HRESULT> {
-        println!("RigX::PortBits getter called");
+        trace!("RigX::PortBits getter called");
         let port_bits = self
             .port_bits_com
             .read()

@@ -10,7 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
     let handle = omnirig::spawn_omnirig_server(omnirig::DummyProvider)?;
 
-    println!("OmniRig COM server started. Press Ctrl+C to stop...");
+    tracing::info!("OmniRig COM server started. Press Ctrl+C to stop...");
 
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = running.clone();
@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     handle.shutdown();
-    println!("Server stopped.");
+    tracing::info!("Server stopped.");
 
     Ok(())
 }
