@@ -724,6 +724,7 @@ impl ToTokens for AutoDispatch {
                 #inner_funcs_impl
             }
 
+            #[allow(clippy::not_unsafe_ptr_arg_deref)]
             impl IDispatch_Impl for #impl_struct_ident {
                 fn GetTypeInfoCount(&self) -> windows::core::Result<u32> {
                     Ok(0)

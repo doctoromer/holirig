@@ -147,6 +147,7 @@ impl OmniRigXFactory {
     }
 }
 
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 impl IClassFactory_Impl for OmniRigXFactory_Impl {
     fn CreateInstance(
         &self,

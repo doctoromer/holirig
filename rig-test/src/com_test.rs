@@ -256,9 +256,9 @@ fn run_vtable_tests(omnirig: &IOmniRigX, verbose: bool) {
 
         let mut rig1: Option<IRigX> = None;
         let hr = omnirig.get_Rig1(&mut rig1);
-        if hr.0 == 0 && rig1.is_some() {
+        if let Some(rig1) = &rig1 && hr.0 == 0 {
             pass("IOmniRigX.Rig1 -> IRigX");
-            run_rig_vtable_tests(rig1.as_ref().unwrap(), "Rig1", verbose);
+            run_rig_vtable_tests(rig1, "Rig1", verbose);
         } else {
             fail(
                 "IOmniRigX.Rig1",
