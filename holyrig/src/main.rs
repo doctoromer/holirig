@@ -34,7 +34,8 @@ async fn main() -> Result<()> {
     };
 
     let (gui_sender, gui_receiver) = mpsc::channel::<GuiMessage>(10);
-    let mut device_manager: DeviceManager = DeviceManager::new(resources.clone());
+    let mut device_manager: DeviceManager =
+        DeviceManager::new(resources.clone(), gui_sender.clone());
 
     let gui_command_sender = device_manager.sender();
     let udp_command_sender = device_manager.sender();
@@ -67,9 +68,8 @@ async fn main() -> Result<()> {
 
     tokio::spawn(async move { jsonrpc_server.run().await });
 
-    let device_gui_sender = gui_sender.clone();
     tokio::spawn(async move {
-        let result = device_manager.run(device_gui_sender).await;
+        let result = device_manager.run().await;
         println!("Manager exited with: {result:?}");
     });
 

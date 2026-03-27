@@ -8,6 +8,7 @@ use egui_dock::{
     AllowedSplits, DockArea, DockState, NodeIndex, SurfaceIndex, TabViewer,
     tab_viewer::OnCloseResponse,
 };
+use std::collections::HashMap;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 #[derive(Debug, Clone)]
@@ -16,12 +17,21 @@ pub struct SerialPortEntry {
     pub display_name: String,
 }
 
+pub enum PortStatus {
+    Disconnected,
+    Connected,
+    Error(String),
+}
+
 pub enum GuiMessage {
     InitialState(Vec<RigSettings>),
     AvailablePorts(Vec<SerialPortEntry>),
+    DeviceConnected { device_id: usize },
+    DeviceDisconnected { device_id: usize },
+    DeviceError { device_id: usize, error: String },
 }
 
-struct AppTabViewer {
+struct AppTabViewer<'a> {
     current_index: usize,
     add_tab_request: bool,
     rig_types: Vec<String>,
@@ -29,14 +39,17 @@ struct AppTabViewer {
     sender: Sender<ManagerCommand>,
     error_message: Option<String>,
     active_tab_id: Option<usize>,
+    device_status: &'a HashMap<usize, PortStatus>,
+    remove_device_ids: Vec<usize>,
 }
 
-impl AppTabViewer {
+impl<'a> AppTabViewer<'a> {
     fn new(
         sender: Sender<ManagerCommand>,
         rig_types: Vec<String>,
         available_ports: Vec<SerialPortEntry>,
         active_tab_id: Option<usize>,
+        device_status: &'a HashMap<usize, PortStatus>,
     ) -> Self {
         AppTabViewer {
             current_index: 0,
@@ -46,11 +59,13 @@ impl AppTabViewer {
             sender,
             error_message: None,
             active_tab_id,
+            device_status,
+            remove_device_ids: Vec::new(),
         }
     }
 }
 
-impl TabViewer for AppTabViewer {
+impl<'a> TabViewer for AppTabViewer<'a> {
     type Tab = RigSettings;
 
     fn title(&mut self, _tab: &mut Self::Tab) -> egui::WidgetText {
@@ -160,30 +175,59 @@ impl TabViewer for AppTabViewer {
 
             ui.separator();
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("OK").clicked() {
-                    let sender = self.sender.clone();
-                    match rig.validate() {
-                        Ok(_) => {
-                            let tab = rig.clone();
-                            tokio::task::spawn(async move {
-                                sender
-                                    .send(ManagerCommand::CreateOrUpdateDevice {
-                                        settings: tab.clone(),
-                                    })
-                                    .await
-                                    .unwrap();
-                            });
+            Grid::new("status_and_buttons")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let (color, text) = match self.device_status.get(&rig.id) {
+                            Some(PortStatus::Connected) => {
+                                (egui::Color32::GREEN, "Connected".to_string())
+                            }
+                            Some(PortStatus::Disconnected) => {
+                                (egui::Color32::RED, "Disconnected".to_string())
+                            }
+                            Some(PortStatus::Error(err)) => {
+                                let mut msg = format!("Error: {err}");
+                                msg.truncate(50);
+                                (egui::Color32::RED, msg)
+                            }
+                            None => (egui::Color32::GRAY, String::new()),
+                        };
+
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                        ui.painter().circle_filled(rect.center(), 4.0, color);
+
+                        if !text.is_empty() {
+                            ui.colored_label(color, &text);
                         }
-                        Err(err) => {
-                            self.error_message = Some(err);
+                    });
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("OK").clicked() {
+                            let sender = self.sender.clone();
+                            match rig.validate() {
+                                Ok(_) => {
+                                    let tab = rig.clone();
+                                    tokio::task::spawn(async move {
+                                        sender
+                                            .send(ManagerCommand::CreateOrUpdateDevice {
+                                                settings: tab.clone(),
+                                            })
+                                            .await
+                                            .unwrap();
+                                    });
+                                }
+                                Err(err) => {
+                                    self.error_message = Some(err);
+                                }
+                            }
                         }
-                    }
-                }
-                if ui.button("Cancel").clicked() {
-                    self.error_message = None;
-                }
-            });
+                        if ui.button("Cancel").clicked() {
+                            self.error_message = None;
+                        }
+                    });
+                });
         });
     }
 
@@ -202,6 +246,8 @@ impl TabViewer for AppTabViewer {
                 .unwrap();
         });
 
+        self.remove_device_ids.push(tab.id);
+
         OnCloseResponse::Close
     }
 
@@ -216,6 +262,7 @@ struct AppTabs {
     available_ports: Vec<SerialPortEntry>,
     sender: Sender<ManagerCommand>,
     current_device_id: usize,
+    device_status: HashMap<usize, PortStatus>,
 }
 
 impl AppTabs {
@@ -227,6 +274,7 @@ impl AppTabs {
             available_ports: Vec::new(),
             sender,
             current_device_id: 0,
+            device_status: HashMap::new(),
         }
     }
 
@@ -258,6 +306,7 @@ impl AppTabs {
             self.rig_types.clone(),
             self.available_ports.clone(),
             active_tab_id,
+            &self.device_status,
         );
 
         DockArea::new(&mut self.dock_state)
@@ -270,12 +319,18 @@ impl AppTabs {
             .allowed_splits(AllowedSplits::None)
             .show_inside(ui, &mut tab_viewer);
 
-        if tab_viewer.add_tab_request {
+        let remove_ids = std::mem::take(&mut tab_viewer.remove_device_ids);
+        let add_tab = tab_viewer.add_tab_request;
+
+        for id in remove_ids {
+            self.device_status.remove(&id);
+        }
+
+        if add_tab {
             self.current_device_id += 1;
             self.dock_state
                 .main_surface_mut()
                 .push_to_first_leaf(RigSettings::default().with_id(self.current_device_id));
-            tab_viewer.add_tab_request = false;
         }
     }
 }
@@ -308,9 +363,25 @@ impl eframe::App for App {
                 GuiMessage::AvailablePorts(ports) => {
                     self.tabs.available_ports = ports;
                 }
+                GuiMessage::DeviceConnected { device_id } => {
+                    self.tabs
+                        .device_status
+                        .insert(device_id, PortStatus::Connected);
+                }
+                GuiMessage::DeviceDisconnected { device_id } => {
+                    self.tabs
+                        .device_status
+                        .insert(device_id, PortStatus::Disconnected);
+                }
+                GuiMessage::DeviceError { device_id, error } => {
+                    self.tabs
+                        .device_status
+                        .insert(device_id, PortStatus::Error(error));
+                }
             }
         }
 
+        // TODO
         ctx.set_pixels_per_point(1.3);
         egui::CentralPanel::default().show(ctx, |ui| self.tabs.ui(ui));
     }

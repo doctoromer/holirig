@@ -89,6 +89,8 @@ pub struct DeviceManager {
     // devices -> manager
     device_tx: mpsc::Sender<DeviceMessage>,
     device_rx: mpsc::Receiver<DeviceMessage>,
+
+    gui_sender: mpsc::Sender<GuiMessage>,
 }
 
 #[derive(Clone)]
@@ -158,7 +160,7 @@ impl ExternalApi for DeviceExternalApi {
 }
 
 impl DeviceManager {
-    pub fn new(resources: Arc<Resources>) -> Self {
+    pub fn new(resources: Arc<Resources>, gui_sender: mpsc::Sender<GuiMessage>) -> Self {
         let (manager_command_tx, manager_command_rx) = mpsc::channel(10);
         let (device_tx, device_rx) = mpsc::channel(10);
 
@@ -183,6 +185,7 @@ impl DeviceManager {
             manager_command_rx,
             device_tx,
             device_rx,
+            gui_sender,
         }
     }
 
@@ -194,7 +197,7 @@ impl DeviceManager {
         self.manager_command_tx.clone()
     }
 
-    pub async fn load_rigs(&mut self, gui_sender: &mpsc::Sender<GuiMessage>) -> Result<()> {
+    pub async fn load_rigs(&mut self) -> Result<()> {
         let settings_path = self.data_dir.join(RIGS_FILE);
         let settings = if !settings_path.exists() {
             Settings::default()
@@ -216,7 +219,7 @@ impl DeviceManager {
                 .map(|settings| (settings.id, settings.rig_type.clone()))
                 .collect(),
         })?;
-        gui_sender
+        self.gui_sender
             .send(GuiMessage::InitialState(settings.rigs.clone()))
             .await?;
 
@@ -235,6 +238,7 @@ impl DeviceManager {
                 let rig_model = device.settings.rig_type.clone();
                 let poll_interval = device.settings.poll_interval;
                 let manager_tx = self.manager_message_tx.clone();
+                let gui_sender = self.gui_sender.clone();
 
                 println!("[manager] Device {device_id} ({rig_model}) connected, initializing...");
 
@@ -252,6 +256,9 @@ impl DeviceManager {
                         device_id,
                         rig_model,
                     });
+                    let _ = gui_sender
+                        .send(GuiMessage::DeviceConnected { device_id })
+                        .await;
 
                     if init_result.is_err() {
                         return;
@@ -298,9 +305,25 @@ impl DeviceManager {
                 let _ = self
                     .manager_message_tx
                     .send(ManagerMessage::DeviceDisconnected { device_id });
+                let gui_sender = self.gui_sender.clone();
+                tokio::spawn(async move {
+                    let _ = gui_sender
+                        .send(GuiMessage::DeviceDisconnected { device_id })
+                        .await;
+                });
             }
             DeviceMessage::Error { device_id, error } => {
                 eprintln!("[manager] Device (id: {device_id}) failed: {error}");
+                let gui_sender = self.gui_sender.clone();
+                let error_clone = error.clone();
+                tokio::spawn(async move {
+                    let _ = gui_sender
+                        .send(GuiMessage::DeviceError {
+                            device_id,
+                            error: error_clone,
+                        })
+                        .await;
+                });
             }
         }
     }
@@ -401,8 +424,8 @@ impl DeviceManager {
         Ok(())
     }
 
-    pub async fn run(&mut self, gui_sender: mpsc::Sender<GuiMessage>) -> Result<()> {
-        self.load_rigs(&gui_sender).await?;
+    pub async fn run(&mut self) -> Result<()> {
+        self.load_rigs().await?;
 
         loop {
             tokio::select! {
