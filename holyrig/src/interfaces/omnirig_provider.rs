@@ -5,6 +5,7 @@ use omnirig::{DummyPortBits, OmniRigProvider, PortBitsControl, RigControl, RigPa
 use parking_lot::RwLock;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::Sender;
+use tracing::error;
 
 use crate::resources::Resources;
 use crate::rig_settings::RigSettings;
@@ -207,7 +208,7 @@ impl HolyRigProvider {
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     Err(err) => {
-                        eprintln!("Omnirig recv error: {err}");
+                        error!(%err, "OmniRig recv error");
                         break;
                     }
                     Ok(ManagerMessage::DeviceError { .. } | ManagerMessage::AvailablePorts(_)) => {}

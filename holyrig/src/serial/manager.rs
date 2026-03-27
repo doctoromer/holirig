@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time::{Duration, sleep};
+use tracing::{debug, error, info, warn};
 
 use crate::resources::Resources;
 use crate::rig_settings::{RigSettings, Settings};
@@ -178,7 +179,7 @@ impl DeviceManager {
 
         if !data_dir.exists() {
             std::fs::create_dir_all(&data_dir)
-                .unwrap_or_else(|e| eprintln!("Failed to create data directory: {}", e));
+                .unwrap_or_else(|e| error!("Failed to create data directory: {e}"));
         }
 
         let settings_path = data_dir.join(RIGS_FILE);
@@ -220,7 +221,7 @@ impl DeviceManager {
     async fn start_devices(&mut self) {
         for (rig_id, settings) in self.settings.rigs.clone().iter().enumerate() {
             if let Err(err) = self.add_device(rig_id, settings.clone()).await {
-                eprintln!("Failed to load rig {rig_id}: {err}");
+                error!(rig_id, %err, "Failed to load rig");
             }
         }
     }
@@ -229,23 +230,23 @@ impl DeviceManager {
         match device_message {
             DeviceMessage::Connected { device_id } => {
                 let Some(device) = self.devices.get(&device_id).cloned() else {
-                    eprintln!("[manager] Unknown device {device_id} connected");
+                    warn!(device_id, "Unknown device connected");
                     return;
                 };
                 let rig_model = device.settings.rig_type.clone();
                 let poll_interval = device.settings.poll_interval;
                 let manager_tx = self.manager_message_tx.clone();
 
-                println!("[manager] Device {device_id} ({rig_model}) connected, initializing...");
+                info!(device_id, %rig_model, "Device connected, initializing");
 
                 tokio::spawn(async move {
                     let external_api = DeviceExternalApi::new(device.command_tx.clone());
                     let init_result = device.rig_wrapper.execute_init(&external_api).await;
 
                     if let Err(ref err) = init_result {
-                        eprintln!("[manager] Device {device_id} initialization failed: {err}");
+                        error!(device_id, %err, "Device initialization failed");
                     } else {
-                        println!("[manager] Device {device_id} initialized");
+                        info!(device_id, "Device initialized");
                     }
 
                     let _ = manager_tx.send(ManagerMessage::DeviceConnected {
@@ -264,9 +265,7 @@ impl DeviceManager {
                         let values = match DeviceManager::execute_status_commands(&device).await {
                             Ok(v) => v,
                             Err(err) => {
-                                eprintln!(
-                                    "[manager] Status polling for device {device_id} failed: {err}"
-                                );
+                                error!(device_id, %err, "Status polling failed");
                                 break;
                             }
                         };
@@ -283,7 +282,7 @@ impl DeviceManager {
                             .collect();
 
                         if !changed_values.is_empty() {
-                            println!("[manager] Status update for {device_id}: {changed_values:?}");
+                            debug!(device_id, ?changed_values, "Status update");
                             let _ = manager_tx.send(ManagerMessage::StatusUpdate {
                                 device_id,
                                 values: changed_values,
@@ -294,13 +293,13 @@ impl DeviceManager {
                 });
             }
             DeviceMessage::Disconnected { device_id } => {
-                println!("[manager] Device {device_id} disconnected");
+                info!(device_id, "Device disconnected");
                 let _ = self
                     .manager_message_tx
                     .send(ManagerMessage::DeviceDisconnected { device_id });
             }
             DeviceMessage::Error { device_id, error } => {
-                eprintln!("[manager] Device (id: {device_id}) failed: {error}");
+                error!(device_id, %error, "Device failed");
                 let _ = self
                     .manager_message_tx
                     .send(ManagerMessage::DeviceError { device_id, error });
@@ -328,7 +327,7 @@ impl DeviceManager {
                 std::fs::write(path, content)?;
 
                 if let Err(err) = self.add_device(settings.id, settings).await {
-                    eprintln!("Failed to add device: {err}");
+                    error!(%err, "Failed to add device");
                 }
             }
             ManagerCommand::ExecuteCommand {
@@ -338,9 +337,7 @@ impl DeviceManager {
                 response_channel,
             } => {
                 if let Some(device) = self.devices.get(&device_id).cloned() {
-                    println!(
-                        "[manager] Executing command '{command_name}' on device {device_id} with params {params:?}"
-                    );
+                    debug!(device_id, %command_name, ?params, "Executing command");
                     tokio::spawn(async move {
                         let external_api = DeviceExternalApi::new(device.command_tx.clone());
                         let result = device
@@ -350,15 +347,11 @@ impl DeviceManager {
 
                         let response = match result {
                             Ok(values) => {
-                                println!(
-                                    "[manager] Command '{command_name}' on device {device_id} succeeded: {values:?}"
-                                );
+                                debug!(device_id, %command_name, ?values, "Command succeeded");
                                 CommandResponse::Success(values)
                             }
                             Err(err) => {
-                                eprintln!(
-                                    "[manager] Command '{command_name}' on device {device_id} failed: {err}"
-                                );
+                                error!(device_id, %command_name, %err, "Command failed");
                                 CommandResponse::Error(err.to_string())
                             }
                         };
@@ -367,7 +360,7 @@ impl DeviceManager {
                         }
                     });
                 } else {
-                    eprintln!("[manager] Device not found: {device_id}");
+                    error!(device_id, "Device not found");
                     if let Some(tx) = response_channel {
                         let _ = tx.send(CommandResponse::Error(format!(
                             "Device not found: {device_id}"
@@ -428,11 +421,11 @@ impl DeviceManager {
         let ports = match tokio::task::spawn_blocking(serialport::available_ports).await {
             Ok(Ok(ports)) => ports,
             Ok(Err(err)) => {
-                eprintln!("[manager] Failed to enumerate serial ports: {err}");
+                error!(%err, "Failed to enumerate serial ports");
                 return;
             }
             Err(err) => {
-                eprintln!("[manager] Port enumeration task panicked: {err}");
+                error!(%err, "Port enumeration task panicked");
                 return;
             }
         };
@@ -477,10 +470,7 @@ impl DeviceManager {
             .get(&settings.rig_type)
             .context("Unknown rig type")?
             .clone();
-        println!(
-            "[manager] Opening device {device_id} ({}) on {}",
-            settings.rig_type, settings.port
-        );
+        info!(device_id, rig_type = %settings.rig_type, port = %settings.port, "Opening device");
         let (serial_device, command_rx) =
             SerialDevice::new(device_id, settings.clone(), self.device_tx.clone()).await?;
 

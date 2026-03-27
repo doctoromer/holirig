@@ -3,6 +3,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, sleep};
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
+use tracing::{info, warn};
 
 use crate::rig_settings::{DataBits, RigSettings, StopBits};
 
@@ -85,15 +86,12 @@ impl SerialDevice {
     }
 
     async fn attempt_reconnect(&mut self) -> Result<()> {
-        println!(
-            "[device {}] Disconnected, attempting to reconnect on {}...",
-            self.id, self.settings.port
-        );
+        warn!(device_id = self.id, port = %self.settings.port, "Disconnected, attempting to reconnect");
         loop {
             sleep(Duration::from_millis(self.settings.poll_interval as u64)).await;
             if let Ok(new_port) = Self::open_port(&self.settings) {
                 self.port = new_port;
-                println!("[device {}] Reconnected on {}", self.id, self.settings.port);
+                info!(device_id = self.id, port = %self.settings.port, "Reconnected");
                 self.device_tx
                     .send(DeviceMessage::Connected { device_id: self.id })
                     .await

@@ -8,6 +8,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::Sender;
+use tracing::{error, info, warn};
 
 use crate::serial::ManagerCommand;
 use crate::serial::manager::ManagerMessage;
@@ -277,14 +278,14 @@ async fn handle_client(
                     })
                     .await
                 {
-                    eprintln!("Failed to send command: {}", e);
+                    error!(%e, "Failed to send command");
                     break;
                 }
 
                 writer.write_all(b"RPRT 0\n").await?;
             }
             Err(e) => {
-                eprintln!("Error parsing command from {}: {}", addr, e);
+                warn!(%addr, %e, "Error parsing command");
                 writer.write_all(b"RPRT 1\n").await?;
             }
         }
@@ -297,7 +298,7 @@ pub async fn run_server(
     mut message_receiver: Receiver<ManagerMessage>,
 ) -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:4532").await?;
-    println!("Rigctld server listening on 127.0.0.1:4532");
+    info!("Rigctld server listening on 127.0.0.1:4532");
 
     let device_status = Arc::new(RwLock::new(DeviceStatus::default()));
 

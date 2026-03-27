@@ -4,6 +4,7 @@ use anyhow::Result;
 use eframe::egui;
 use holyrig::interfaces::jsonrpc::JsonRpcServer;
 use holyrig::resources::{ResourceError, Resources};
+use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, Registry, fmt, prelude::*};
 
 use holyrig::interfaces::{rigctld, udp_server};
@@ -51,15 +52,15 @@ async fn main() -> Result<()> {
         Err(err) => {
             match err {
                 ResourceError::Schema(parse_error) => {
-                    eprintln!("{parse_error}");
+                    error!(%parse_error, "Failed to load schema");
                 }
                 ResourceError::Rig(parse_errors) => {
                     for err in parse_errors {
-                        eprintln!("{err}");
+                        error!(%err, "Failed to load rig");
                     }
                 }
                 err => {
-                    eprintln!("{err}")
+                    error!(%err, "Failed to load resources");
                 }
             }
             return Ok(());
@@ -86,7 +87,7 @@ async fn main() -> Result<()> {
             tokio::runtime::Handle::current(),
             initial_rigs,
         );
-        println!("Starting OmniRig server");
+        info!("Starting OmniRig server");
         omnirig::spawn_omnirig_server(provider).expect("Failed to start OmniRig COM server")
     };
 
@@ -106,7 +107,7 @@ async fn main() -> Result<()> {
     let initial_rigs = initial_rigs.to_vec();
     tokio::spawn(async move {
         let result = device_manager.run().await;
-        println!("Manager exited with: {result:?}");
+        info!(?result, "Manager exited");
     });
 
     let udp_resources = resources.clone();
@@ -114,7 +115,7 @@ async fn main() -> Result<()> {
         if let Err(err) =
             udp_server::run_server(udp_resources, udp_command_sender, udp_message_receiver).await
         {
-            eprintln!("UDP server error: {err}");
+            error!(%err, "UDP server error");
         }
     });
 
@@ -122,7 +123,7 @@ async fn main() -> Result<()> {
         if let Err(err) =
             rigctld::run_server(rigctld_command_sender, rigctld_message_receiver).await
         {
-            eprintln!("Rigctld server error: {err}");
+            error!(%err, "Rigctld server error");
         }
     });
 

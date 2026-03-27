@@ -6,6 +6,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
+use tracing::{debug, info};
 
 use crate::resources::Resources;
 use crate::serial::ManagerCommand;
@@ -96,7 +97,7 @@ pub async fn run_server(
     mut message_receiver: Receiver<ManagerMessage>,
 ) -> Result<()> {
     let socket = UdpSocket::bind("127.0.0.1:8888").await?;
-    println!("UDP debug interface listening on 127.0.0.1:8888");
+    info!("UDP debug interface listening on 127.0.0.1:8888");
 
     let mut buf = [0; 1024];
 
@@ -162,7 +163,7 @@ pub async fn run_server(
 
         match parse_command(trimmed) {
             Ok((device_id, command_name, params)) => {
-                println!("Received command from {addr}: {device_id} {command_name} {params:?}");
+                debug!(%addr, device_id, %command_name, ?params, "Received command");
 
                 device_id_to_addr.insert(device_id, addr);
 

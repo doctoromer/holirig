@@ -2,6 +2,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::Result;
 use argh::FromArgs;
+use tracing::{error, info};
 
 use holyrig::runtime::{parse_and_validate_with_schema, parse_rig_file, parse_schema};
 
@@ -17,6 +18,13 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive(tracing::Level::INFO.into()),
+        )
+        .init();
+
     let args: Args = argh::from_env();
 
     let rig = if let Some(rig) = args.rig {
@@ -37,37 +45,41 @@ fn main() -> Result<()> {
             let schemas = HashMap::from([(schema.name.clone(), schema)]);
             match parse_and_validate_with_schema(&rig, &schemas) {
                 Ok(rig_file) => {
-                    println!("Successfully parsed schema and rig!");
-                    println!(" - Schema: {}", rig_file.impl_block.schema);
-                    println!(" - Name: {}", rig_file.impl_block.name);
+                    info!(
+                        schema = %rig_file.impl_block.schema,
+                        name = %rig_file.impl_block.name,
+                        "Successfully parsed schema and rig"
+                    );
                 }
                 Err(errors) => {
                     for err in errors {
-                        eprintln!("{err}");
+                        error!(%err, "Parse error");
                     }
                 }
             }
         }
         (None, Some(schema)) => match parse_schema(&schema) {
             Ok(schema) => {
-                println!("Successfully parsed schema \"{}\"!", schema.name);
+                info!(name = %schema.name, "Successfully parsed schema");
             }
             Err(err) => {
-                eprintln!("{err}");
+                error!(%err, "Failed to parse schema");
             }
         },
         (Some(rig), None) => match parse_rig_file(&rig) {
             Ok(rig) => {
-                println!("Successfully parsed rig!");
-                println!(" - Schema: {}", rig.impl_block.schema);
-                println!(" - Name: {}", rig.impl_block.name);
+                info!(
+                    schema = %rig.impl_block.schema,
+                    name = %rig.impl_block.name,
+                    "Successfully parsed rig"
+                );
             }
             Err(err) => {
-                eprintln!("{err}");
+                error!(%err, "Failed to parse rig");
             }
         },
         (None, None) => {
-            eprintln!("You must provide rig file, schema or both!");
+            error!("You must provide rig file, schema or both");
         }
     }
 

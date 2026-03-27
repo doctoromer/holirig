@@ -6,6 +6,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, mpsc};
+use tracing::{error, info};
 
 use super::{Notification, RigRpcHandler};
 use crate::interfaces::jsonrpc::{Request, Response, RpcError};
@@ -64,7 +65,7 @@ impl JsonRpcServer {
 
         tokio::spawn(async move {
             let socket = UdpSocket::bind(&addr).await.unwrap();
-            println!("JSON-RPC UDP server listening on {}", addr);
+            info!(%addr, "JSON-RPC UDP server listening");
 
             let mut buf = vec![0u8; 2048];
             loop {
@@ -76,7 +77,7 @@ impl JsonRpcServer {
                                     Ok(response) => response,
                                     Err(err) => {
                                         if let Some(rpc_error) = err.downcast_ref::<RpcError>() {
-                                            eprintln!("Error handling UDP datagram: {err}");
+                                            error!(%err, "Error handling UDP datagram");
                                             Response::build_error(rpc_error.clone())
                                         } else {
                                             continue;
@@ -87,14 +88,14 @@ impl JsonRpcServer {
                                 socket.send_to(&error_data, src_addr).await.unwrap();
                             },
                             Err(err) => {
-                                eprintln!("Failed to receive data: {err}");
+                                error!(%err, "Failed to receive data");
                             }
                         }
                     }
                     message = self.manager_rx.recv() => {
                         let message = message.unwrap();
                         if let Err(err) = self.handle_manager_message(message, &socket).await {
-                            eprintln!("Error handling manager message: {err}");
+                            error!(%err, "Error handling manager message");
                         }
                     }
                 }
@@ -229,7 +230,7 @@ impl JsonRpcServer {
                     };
                     let packet = serde_json::to_vec(&notification).unwrap();
                     if let Err(err) = socket.send_to(&packet, addr).await {
-                        eprintln!("Failed to send notification to {addr}: {err}");
+                        error!(%addr, %err, "Failed to send notification");
                         self.registered_status.write().remove(&(device_id, addr));
                     }
                 }
