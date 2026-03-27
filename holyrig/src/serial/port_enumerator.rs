@@ -13,8 +13,9 @@ pub enum PortEnumeratorError {
 }
 
 pub async fn run(gui_sender: mpsc::Sender<GuiMessage>) -> Result<(), PortEnumeratorError> {
+    let mut prev_ports = vec![];
     loop {
-        let ports = serialport::available_ports()?
+        let ports: Vec<SerialPortEntry> = serialport::available_ports()?
             .into_iter()
             .filter_map(|p| match &p.port_type {
                 serialport::SerialPortType::UsbPort(usb) => {
@@ -32,8 +33,13 @@ pub async fn run(gui_sender: mpsc::Sender<GuiMessage>) -> Result<(), PortEnumera
             })
             .collect();
 
-        gui_sender.send(GuiMessage::AvailablePorts(ports)).await?;
+        if ports != prev_ports {
+            gui_sender
+                .send(GuiMessage::AvailablePorts(ports.clone()))
+                .await?;
+        }
+        prev_ports = ports;
 
-        sleep(Duration::from_secs(2)).await;
+        sleep(Duration::from_millis(500)).await;
     }
 }

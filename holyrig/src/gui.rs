@@ -11,7 +11,7 @@ use egui_dock::{
 use std::collections::HashMap;
 use tokio::sync::mpsc::{Receiver, Sender};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SerialPortEntry {
     pub port_name: String,
     pub display_name: String,
