@@ -1,15 +1,15 @@
 #![allow(non_snake_case)]
 
-use windows::core::Interface;
 use windows::Win32::System::Com::{
-    CLSIDFromProgID, CoCreateInstance, CoInitializeEx, CoUninitialize, IDispatch,
-    CLSCTX_LOCAL_SERVER, COINIT_MULTITHREADED, DISPATCH_PROPERTYGET, DISPPARAMS,
+    CLSCTX_LOCAL_SERVER, CLSIDFromProgID, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+    CoUninitialize, DISPATCH_PROPERTYGET, DISPPARAMS, IDispatch,
 };
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE,
-    KEY_READ, KEY_WOW64_32KEY, REG_SAM_FLAGS, REG_SZ,
+    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, REG_SAM_FLAGS, REG_SZ,
+    RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
 };
 use windows::Win32::System::Variant::VARIANT;
+use windows::core::Interface;
 use windows_core::{BSTR, PCWSTR};
 
 use omnirig::omnirig::IOmniRigX;
@@ -256,7 +256,9 @@ fn run_vtable_tests(omnirig: &IOmniRigX, verbose: bool) {
 
         let mut rig1: Option<IRigX> = None;
         let hr = omnirig.get_Rig1(&mut rig1);
-        if let Some(rig1) = &rig1 && hr.0 == 0 {
+        if let Some(rig1) = &rig1
+            && hr.0 == 0
+        {
             pass("IOmniRigX.Rig1 -> IRigX");
             run_rig_vtable_tests(rig1, "Rig1", verbose);
         } else {

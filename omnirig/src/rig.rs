@@ -2,10 +2,10 @@
 #![allow(non_snake_case)]
 
 use std::sync::RwLock;
-use windows::core::{implement, BSTR};
 use windows::Win32::System::Com::{IDispatch, IDispatch_Impl, IDispatch_Vtbl};
-use windows::Win32::System::Variant::{VariantGetElementCount, VariantToBuffer, VARIANT};
-use windows_core::{interface, Interface, HRESULT};
+use windows::Win32::System::Variant::{VARIANT, VariantGetElementCount, VariantToBuffer};
+use windows::core::{BSTR, implement};
+use windows_core::{HRESULT, Interface, interface};
 
 use crate::enums::RigParamX;
 use crate::port_bits::{IPortBits, PortBits};
@@ -438,7 +438,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn get_RigType(&self, value: *mut BSTR) -> HRESULT {
         match self.get_RigType() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -448,7 +448,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn get_ReadableParams(&self, value: *mut i32) -> HRESULT {
         match self.get_ReadableParams() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -458,7 +458,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn get_WriteableParams(&self, value: *mut i32) -> HRESULT {
         match self.get_WriteableParams() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -468,7 +468,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn IsParamReadable(&self, Param: i32, value: *mut bool) -> HRESULT {
         match self.IsParamReadable(Param) {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -478,7 +478,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn IsParamWriteable(&self, Param: i32, value: *mut bool) -> HRESULT {
         match self.IsParamWriteable(Param) {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -488,7 +488,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn get_Status(&self, value: *mut i32) -> HRESULT {
         match self.get_Status() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -498,7 +498,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn get_StatusStr(&self, value: *mut BSTR) -> HRESULT {
         match self.get_StatusStr() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -508,7 +508,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn get_Freq(&self, value: *mut i32) -> HRESULT {
         match self.get_Freq() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -525,7 +525,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn get_FreqA(&self, value: *mut i32) -> HRESULT {
         match self.get_FreqA() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -542,7 +542,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn get_FreqB(&self, value: *mut i32) -> HRESULT {
         match self.get_FreqB() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -559,7 +559,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn get_RitOffset(&self, value: *mut i32) -> HRESULT {
         match self.get_RitOffset() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -576,7 +576,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn get_Pitch(&self, value: *mut i32) -> HRESULT {
         match self.get_Pitch() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -593,7 +593,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn get_Vfo(&self, value: *mut i32) -> HRESULT {
         match self.get_Vfo() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -610,7 +610,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn get_Split(&self, value: *mut i32) -> HRESULT {
         match self.get_Split() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -627,7 +627,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn get_Rit(&self, value: *mut i32) -> HRESULT {
         match self.get_Rit() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -644,7 +644,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn get_Xit(&self, value: *mut i32) -> HRESULT {
         match self.get_Xit() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -661,7 +661,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn get_Tx(&self, value: *mut i32) -> HRESULT {
         match self.get_Tx() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -678,7 +678,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn get_Mode(&self, value: *mut i32) -> HRESULT {
         match self.get_Mode() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -716,7 +716,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn FrequencyOfTone(&self, Tone: i32, value: *mut i32) -> HRESULT {
         match self.FrequencyOfTone(Tone) {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -726,7 +726,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn GetRxFrequency(&self, value: *mut i32) -> HRESULT {
         match self.GetRxFrequency() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -736,7 +736,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn GetTxFrequency(&self, value: *mut i32) -> HRESULT {
         match self.GetTxFrequency() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -746,7 +746,7 @@ impl crate::rig::IRigX_Impl for RigX_Impl {
     unsafe fn get_PortBits(&self, value: *mut Option<IDispatch>) -> HRESULT {
         match self.get_PortBits() {
             Ok(v) => {
-                *value = Some(v);
+                unsafe { *value = Some(v) };
                 HRESULT(0)
             }
             Err(e) => e,

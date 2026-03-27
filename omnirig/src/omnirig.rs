@@ -3,12 +3,12 @@
 
 use std::ffi::c_void;
 use std::sync::{Arc, RwLock};
-use windows::core::{implement, IUnknown, Interface, GUID};
 use windows::Win32::Foundation::{CLASS_E_NOAGGREGATION, E_NOINTERFACE};
 use windows::Win32::System::Com::{
     IClassFactory, IClassFactory_Impl, IDispatch, IDispatch_Impl, IDispatch_Vtbl,
 };
-use windows_core::{interface, BOOL, HRESULT};
+use windows::core::{GUID, IUnknown, Interface, implement};
+use windows_core::{BOOL, HRESULT, interface};
 
 use crate::provider::OmniRigProvider;
 use crate::rig::{IRigX, RigX};
@@ -109,25 +109,35 @@ impl OmniRigX {
 
 impl IOmniRigX_Impl for OmniRigX_Impl {
     unsafe fn get_InterfaceVersion(&self, value: *mut i32) -> HRESULT {
-        *value = self.get_InterfaceVersion().unwrap();
+        unsafe {
+            *value = self.get_InterfaceVersion().unwrap();
+        }
         HRESULT(0)
     }
     unsafe fn get_SoftwareVersion(&self, value: *mut i32) -> HRESULT {
-        *value = self.get_SoftwareVersion().unwrap();
+        unsafe {
+            *value = self.get_SoftwareVersion().unwrap();
+        }
         HRESULT(0)
     }
     unsafe fn get_Rig1(&self, value: *mut Option<IRigX>) -> HRESULT {
         let disp = self.get_Rig1().unwrap();
-        *value = Some(disp.cast().unwrap());
+        unsafe {
+            *value = Some(disp.cast().unwrap());
+        }
         HRESULT(0)
     }
     unsafe fn get_Rig2(&self, value: *mut Option<IRigX>) -> HRESULT {
         let disp = self.get_Rig2().unwrap();
-        *value = Some(disp.cast().unwrap());
+        unsafe {
+            *value = Some(disp.cast().unwrap());
+        }
         HRESULT(0)
     }
     unsafe fn get_DialogVisible(&self, value: *mut bool) -> HRESULT {
-        *value = self.get_DialogVisible().unwrap();
+        unsafe {
+            *value = self.get_DialogVisible().unwrap();
+        }
         HRESULT(0)
     }
     unsafe fn set_DialogVisible(&self, value: bool) -> HRESULT {

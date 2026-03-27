@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = omnirig::spawn_omnirig_server(omnirig::DummyProvider)?;

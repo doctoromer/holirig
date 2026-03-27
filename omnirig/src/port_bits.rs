@@ -1,9 +1,9 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
-use windows::core::implement;
 use windows::Win32::System::Com::{IDispatch, IDispatch_Impl, IDispatch_Vtbl};
-use windows_core::{interface, HRESULT};
+use windows::core::implement;
+use windows_core::{HRESULT, interface};
 
 use auto_dispatch::auto_dispatch;
 
@@ -97,7 +97,7 @@ impl crate::port_bits::IPortBits_Impl for PortBits_Impl {
     unsafe fn Lock(&self, ok: *mut bool) -> HRESULT {
         match self.Lock() {
             Ok(v) => {
-                *ok = v;
+                unsafe { *ok = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -107,7 +107,7 @@ impl crate::port_bits::IPortBits_Impl for PortBits_Impl {
     unsafe fn get_Rts(&self, value: *mut bool) -> HRESULT {
         match self.get_Rts() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -124,7 +124,7 @@ impl crate::port_bits::IPortBits_Impl for PortBits_Impl {
     unsafe fn get_Dtr(&self, value: *mut bool) -> HRESULT {
         match self.get_Dtr() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -141,7 +141,7 @@ impl crate::port_bits::IPortBits_Impl for PortBits_Impl {
     unsafe fn get_Cts(&self, value: *mut bool) -> HRESULT {
         match self.get_Cts() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
@@ -151,7 +151,7 @@ impl crate::port_bits::IPortBits_Impl for PortBits_Impl {
     unsafe fn get_Dsr(&self, value: *mut bool) -> HRESULT {
         match self.get_Dsr() {
             Ok(v) => {
-                *value = v;
+                unsafe { *value = v };
                 HRESULT(0)
             }
             Err(e) => e,
