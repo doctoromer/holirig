@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, sleep};
@@ -28,7 +28,7 @@ pub enum DeviceMessage {
 
 pub struct SerialDevice {
     id: RigId,
-    port: SerialStream,
+    port: Option<SerialStream>,
     settings: RigSettings,
     command_tx: mpsc::Sender<DeviceCommand>,
     device_tx: mpsc::Sender<DeviceMessage>,
@@ -46,7 +46,7 @@ impl SerialDevice {
         Ok((
             Self {
                 id,
-                port,
+                port: Some(port),
                 settings,
                 command_tx,
                 device_tx,
@@ -87,10 +87,12 @@ impl SerialDevice {
 
     async fn attempt_reconnect(&mut self) -> Result<()> {
         warn!(device_id = %self.id, port = %self.settings.port, "Disconnected, attempting to reconnect");
+        // Drop the old port immediately so the kernel releases the device node.
+        self.port.take();
         loop {
             sleep(Duration::from_millis(self.settings.poll_interval as u64)).await;
             if let Ok(new_port) = Self::open_port(&self.settings) {
-                self.port = new_port;
+                self.port = Some(new_port);
                 info!(device_id = %self.id, port = %self.settings.port, "Reconnected");
                 self.device_tx
                     .send(DeviceMessage::Connected { device_id: self.id })
@@ -101,14 +103,21 @@ impl SerialDevice {
         }
     }
 
+    fn port(&mut self) -> Result<&mut SerialStream> {
+        match &mut self.port {
+            Some(port) => Ok(port),
+            None => bail!("Serial port is not connected"),
+        }
+    }
+
     async fn write_only(&mut self, data: &[u8]) -> Result<()> {
-        self.port.write_all(data).await?;
+        self.port()?.write_all(data).await?;
         Ok(())
     }
 
     async fn read_exact(&mut self, length: usize) -> Result<Vec<u8>> {
         let mut buf = vec![0u8; length];
-        self.port.read_exact(&mut buf).await?;
+        self.port()?.read_exact(&mut buf).await?;
         Ok(buf)
     }
 
