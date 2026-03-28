@@ -6,7 +6,7 @@ use eframe::egui;
 use holyrig::interfaces::jsonrpc::JsonRpcServer;
 use holyrig::resources::{ResourceError, Resources};
 use tracing::{error, info};
-use tracing_subscriber::{EnvFilter, Registry, fmt, prelude::*};
+use tracing_subscriber::{EnvFilter, Registry, prelude::*};
 
 use holyrig::interfaces::{rigctld, udp_server};
 use holyrig::{gui, serial};
@@ -49,17 +49,31 @@ fn init_tracing() -> (
     let (debug_writer, debug_guard) = tracing_appender::non_blocking(debug_appender);
     let (trace_writer, trace_guard) = tracing_appender::non_blocking(trace_appender);
 
+    let trace_filter = EnvFilter::builder()
+        .with_default_directive(tracing::level_filters::LevelFilter::INFO.into())
+        .from_env()
+        .unwrap()
+        .add_directive("holyrig=info".parse().unwrap())
+        .add_directive("omnirig=info".parse().unwrap());
+
+    let debug_filter = EnvFilter::builder()
+        .with_default_directive(tracing::level_filters::LevelFilter::DEBUG.into())
+        .from_env()
+        .unwrap()
+        .add_directive("holyrig=info".parse().unwrap())
+        .add_directive("omnirig=info".parse().unwrap());
+
     Registry::default()
-        .with(fmt::layer().with_filter(EnvFilter::new("info")))
+        .with(tracing_subscriber::fmt::layer().with_filter(EnvFilter::new("info")))
         .with(
-            fmt::layer()
+            tracing_subscriber::fmt::layer()
                 .with_writer(debug_writer)
-                .with_filter(EnvFilter::new("debug")),
+                .with_filter(debug_filter),
         )
         .with(
-            fmt::layer()
+            tracing_subscriber::fmt::layer()
                 .with_writer(trace_writer)
-                .with_filter(EnvFilter::new("trace")),
+                .with_filter(trace_filter),
         )
         .init();
 
