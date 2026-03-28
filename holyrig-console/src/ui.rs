@@ -95,16 +95,19 @@ fn draw_repl(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let history_lines: Vec<Line> = app
         .repl_history
         .iter()
-        .map(|entry| {
+        .flat_map(|entry| {
             let (prefix, style) = match entry.kind {
                 EntryKind::Command => ("> ", Style::default().fg(Color::Cyan)),
-                EntryKind::Response => ("< ", Style::default().fg(Color::White)),
+                EntryKind::Response => ("  ", Style::default().fg(Color::White)),
                 EntryKind::Error => ("! ", Style::default().fg(Color::Red)),
             };
-            Line::from(vec![
-                Span::styled(prefix, style),
-                Span::styled(&entry.text, style),
-            ])
+            entry
+                .text
+                .split("\n")
+                .map(|line| {
+                    Line::from(vec![Span::styled(prefix, style), Span::styled(line, style)])
+                })
+                .collect::<Vec<_>>()
         })
         .collect();
 
