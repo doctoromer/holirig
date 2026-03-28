@@ -5,7 +5,7 @@ use tokio::time::{Duration, sleep};
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 use tracing::{info, warn};
 
-use crate::rig_settings::{DataBits, RigSettings, StopBits};
+use crate::rig_settings::{DataBits, RigId, RigSettings, StopBits};
 
 #[derive(Debug)]
 pub enum DeviceCommand {
@@ -21,13 +21,13 @@ pub enum DeviceCommand {
 
 #[derive(Debug)]
 pub enum DeviceMessage {
-    Error { device_id: usize, error: String },
-    Disconnected { device_id: usize },
-    Connected { device_id: usize },
+    Error { device_id: RigId, error: String },
+    Disconnected { device_id: RigId },
+    Connected { device_id: RigId },
 }
 
 pub struct SerialDevice {
-    id: usize,
+    id: RigId,
     port: SerialStream,
     settings: RigSettings,
     command_tx: mpsc::Sender<DeviceCommand>,
@@ -36,7 +36,7 @@ pub struct SerialDevice {
 
 impl SerialDevice {
     pub async fn new(
-        id: usize,
+        id: RigId,
         settings: RigSettings,
         device_tx: mpsc::Sender<DeviceMessage>,
     ) -> Result<(Self, mpsc::Receiver<DeviceCommand>)> {
@@ -86,12 +86,12 @@ impl SerialDevice {
     }
 
     async fn attempt_reconnect(&mut self) -> Result<()> {
-        warn!(device_id = self.id, port = %self.settings.port, "Disconnected, attempting to reconnect");
+        warn!(device_id = %self.id, port = %self.settings.port, "Disconnected, attempting to reconnect");
         loop {
             sleep(Duration::from_millis(self.settings.poll_interval as u64)).await;
             if let Ok(new_port) = Self::open_port(&self.settings) {
                 self.port = new_port;
-                info!(device_id = self.id, port = %self.settings.port, "Reconnected");
+                info!(device_id = %self.id, port = %self.settings.port, "Reconnected");
                 self.device_tx
                     .send(DeviceMessage::Connected { device_id: self.id })
                     .await

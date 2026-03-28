@@ -8,7 +8,7 @@ use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
 
 use crate::resources::Resources;
-use crate::rig_settings::{RigSettings, Settings};
+use crate::rig_settings::{RigId, RigSettings, Settings};
 use crate::runtime::ExternalApi;
 use crate::runtime::{Interpreter, Value};
 use crate::serial::device::{DeviceCommand, DeviceMessage, SerialDevice};
@@ -47,34 +47,34 @@ pub enum ManagerCommand {
         settings: RigSettings,
     },
     ExecuteCommand {
-        device_id: usize,
+        device_id: RigId,
         command_name: String,
         params: HashMap<String, String>,
         response_channel: Option<oneshot::Sender<CommandResponse>>,
     },
     RemoveDevice {
-        device_id: usize,
+        device_id: RigId,
     },
     ListDevices {
-        response_channel: oneshot::Sender<HashMap<usize, String>>,
+        response_channel: oneshot::Sender<HashMap<RigId, String>>,
     },
 }
 
 #[derive(Debug, Clone)]
 pub enum ManagerMessage {
     DeviceConnected {
-        device_id: usize,
+        device_id: RigId,
         rig_model: String,
     },
     DeviceDisconnected {
-        device_id: usize,
+        device_id: RigId,
     },
     DeviceError {
-        device_id: usize,
+        device_id: RigId,
         error: String,
     },
     StatusUpdate {
-        device_id: usize,
+        device_id: RigId,
         values: HashMap<String, Value>,
     },
     AvailablePorts(Vec<SerialPortEntry>),
@@ -82,7 +82,7 @@ pub enum ManagerMessage {
 
 pub struct DeviceManager {
     resources: Arc<Resources>,
-    devices: HashMap<usize, Device>,
+    devices: HashMap<RigId, Device>,
     settings: Settings,
     data_dir: PathBuf,
 
@@ -206,8 +206,8 @@ impl DeviceManager {
         }
     }
 
-    pub fn initial_rigs(&self) -> &[RigSettings] {
-        &self.settings.rigs
+    pub fn initial_rigs(&self) -> impl Iterator<Item = &RigSettings> {
+        self.settings.rigs()
     }
 
     pub fn receiver(&self) -> broadcast::Receiver<ManagerMessage> {
@@ -219,9 +219,10 @@ impl DeviceManager {
     }
 
     async fn start_devices(&mut self) {
-        for (rig_id, settings) in self.settings.rigs.clone().iter().enumerate() {
-            if let Err(err) = self.add_device(rig_id, settings.clone()).await {
-                error!(rig_id, %err, "Failed to load rig");
+        let rigs: Vec<_> = self.settings.rigs().cloned().collect();
+        for settings in rigs {
+            if let Err(err) = self.add_device(settings.id, settings.clone()).await {
+                error!(rig_id = %settings.id, %err, "Failed to load rig");
             }
         }
     }
@@ -230,23 +231,23 @@ impl DeviceManager {
         match device_message {
             DeviceMessage::Connected { device_id } => {
                 let Some(device) = self.devices.get(&device_id).cloned() else {
-                    warn!(device_id, "Unknown device connected");
+                    warn!(%device_id, "Unknown device connected");
                     return;
                 };
                 let rig_model = device.settings.rig_type.clone();
                 let poll_interval = device.settings.poll_interval;
                 let manager_tx = self.manager_message_tx.clone();
 
-                info!(device_id, %rig_model, "Device connected, initializing");
+                info!(%device_id, %rig_model, "Device connected, initializing");
 
                 tokio::spawn(async move {
                     let external_api = DeviceExternalApi::new(device.command_tx.clone());
                     let init_result = device.rig_wrapper.execute_init(&external_api).await;
 
                     if let Err(ref err) = init_result {
-                        error!(device_id, %err, "Device initialization failed");
+                        error!(%device_id, %err, "Device initialization failed");
                     } else {
-                        info!(device_id, "Device initialized");
+                        info!(%device_id, "Device initialized");
                     }
 
                     let _ = manager_tx.send(ManagerMessage::DeviceConnected {
@@ -265,7 +266,7 @@ impl DeviceManager {
                         let values = match DeviceManager::execute_status_commands(&device).await {
                             Ok(v) => v,
                             Err(err) => {
-                                error!(device_id, %err, "Status polling failed");
+                                error!(%device_id, %err, "Status polling failed");
                                 break;
                             }
                         };
@@ -282,7 +283,7 @@ impl DeviceManager {
                             .collect();
 
                         if !changed_values.is_empty() {
-                            debug!(device_id, ?changed_values, "Status update");
+                            debug!(%device_id, ?changed_values, "Status update");
                             let _ = manager_tx.send(ManagerMessage::StatusUpdate {
                                 device_id,
                                 values: changed_values,
@@ -293,13 +294,13 @@ impl DeviceManager {
                 });
             }
             DeviceMessage::Disconnected { device_id } => {
-                info!(device_id, "Device disconnected");
+                info!(%device_id, "Device disconnected");
                 let _ = self
                     .manager_message_tx
                     .send(ManagerMessage::DeviceDisconnected { device_id });
             }
             DeviceMessage::Error { device_id, error } => {
-                error!(device_id, %error, "Device failed");
+                error!(%device_id, %error, "Device failed");
                 let _ = self
                     .manager_message_tx
                     .send(ManagerMessage::DeviceError { device_id, error });
@@ -312,21 +313,19 @@ impl DeviceManager {
             ManagerCommand::CreateOrUpdateDevice { settings } => {
                 self.devices.remove(&settings.id);
 
-                let changed_settings = self
-                    .settings
-                    .rigs
-                    .iter_mut()
-                    .find(|rig| rig.id == settings.id);
-                if let Some(changed_settings) = changed_settings {
-                    *changed_settings = settings.clone();
-                } else {
-                    self.settings.rigs.push(settings.clone());
-                };
+                let device_id =
+                    if let Some(changed_settings) = self.settings.get_rig_mut(settings.id) {
+                        *changed_settings = settings.clone();
+                        settings.id
+                    } else {
+                        self.settings.add_rig(settings.clone())
+                    };
                 let path = self.data_dir.join(RIGS_FILE);
                 let content = toml::to_string(&self.settings)?;
                 std::fs::write(path, content)?;
 
-                if let Err(err) = self.add_device(settings.id, settings).await {
+                let device_settings = self.settings.get_rig(device_id).unwrap().clone();
+                if let Err(err) = self.add_device(device_id, device_settings).await {
                     error!(%err, "Failed to add device");
                 }
             }
@@ -337,7 +336,7 @@ impl DeviceManager {
                 response_channel,
             } => {
                 if let Some(device) = self.devices.get(&device_id).cloned() {
-                    debug!(device_id, %command_name, ?params, "Executing command");
+                    debug!(%device_id, %command_name, ?params, "Executing command");
                     tokio::spawn(async move {
                         let external_api = DeviceExternalApi::new(device.command_tx.clone());
                         let result = device
@@ -347,11 +346,11 @@ impl DeviceManager {
 
                         let response = match result {
                             Ok(values) => {
-                                debug!(device_id, %command_name, ?values, "Command succeeded");
+                                debug!(%device_id, %command_name, ?values, "Command succeeded");
                                 CommandResponse::Success(values)
                             }
                             Err(err) => {
-                                error!(device_id, %command_name, %err, "Command failed");
+                                error!(%device_id, %command_name, %err, "Command failed");
                                 CommandResponse::Error(err.to_string())
                             }
                         };
@@ -360,7 +359,7 @@ impl DeviceManager {
                         }
                     });
                 } else {
-                    error!(device_id, "Device not found");
+                    error!(%device_id, "Device not found");
                     if let Some(tx) = response_channel {
                         let _ = tx.send(CommandResponse::Error(format!(
                             "Device not found: {device_id}"
@@ -369,7 +368,7 @@ impl DeviceManager {
                 }
             }
             ManagerCommand::ListDevices { response_channel } => {
-                let devices: HashMap<usize, String> = self
+                let devices: HashMap<RigId, String> = self
                     .devices
                     .iter()
                     .map(|(id, device)| (*id, device.settings.rig_type.clone()))
@@ -381,17 +380,10 @@ impl DeviceManager {
                     let _ = device.command_tx.send(DeviceCommand::Shutdown).await;
                 }
 
-                if let Some(pos) = self
-                    .settings
-                    .rigs
-                    .iter()
-                    .position(|rig| rig.id == device_id)
-                {
-                    self.settings.rigs.remove(pos);
-                    let path = self.data_dir.join(RIGS_FILE);
-                    let content = toml::to_string(&self.settings)?;
-                    std::fs::write(path, content)?;
-                }
+                self.settings.remove_rig(device_id);
+                let path = self.data_dir.join(RIGS_FILE);
+                let content = toml::to_string(&self.settings)?;
+                std::fs::write(path, content)?;
             }
         }
         Ok(())
@@ -463,14 +455,14 @@ impl DeviceManager {
         Ok(external_api.get_status_values())
     }
 
-    pub async fn add_device(&mut self, device_id: usize, settings: RigSettings) -> Result<()> {
+    pub async fn add_device(&mut self, device_id: RigId, settings: RigSettings) -> Result<()> {
         let rig_wrapper = self
             .resources
             .rigs
             .get(&settings.rig_type)
             .context("Unknown rig type")?
             .clone();
-        info!(device_id, rig_type = %settings.rig_type, port = %settings.port, "Opening device");
+        info!(%device_id, rig_type = %settings.rig_type, port = %settings.port, "Opening device");
         let (serial_device, command_rx) =
             SerialDevice::new(device_id, settings.clone(), self.device_tx.clone()).await?;
 

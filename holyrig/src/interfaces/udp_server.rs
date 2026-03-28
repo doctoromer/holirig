@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -9,17 +10,19 @@ use tokio::sync::oneshot;
 use tracing::{debug, info};
 
 use crate::resources::Resources;
+use crate::rig_settings::RigId;
 use crate::serial::ManagerCommand;
 use crate::serial::manager::{CommandResponse, ManagerMessage};
 
 // Parse a command string in format: "DEVICE_ID COMMAND_NAME PARAM1=VALUE1 PARAM2=VALUE2"
-fn parse_command(cmd: &str) -> Result<(usize, String, HashMap<String, String>)> {
+fn parse_command(cmd: &str) -> Result<(RigId, String, HashMap<String, String>)> {
     let mut parts = cmd.split_whitespace();
 
-    let device_id = parts
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("Missing device ID"))?
-        .parse()?;
+    let device_id: RigId = serde_json::from_str(
+        parts
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Missing device ID"))?,
+    )?;
 
     let command_name = parts
         .next()
@@ -41,7 +44,7 @@ fn parse_command(cmd: &str) -> Result<(usize, String, HashMap<String, String>)> 
     Ok((device_id, command_name, params))
 }
 
-fn format_connect_response(resources: &Resources, devices: &HashMap<usize, String>) -> String {
+fn format_connect_response(resources: &Resources, devices: &HashMap<RigId, String>) -> String {
     let mut response = String::new();
 
     response.push_str("=== Devices ===\n");
@@ -49,7 +52,7 @@ fn format_connect_response(resources: &Resources, devices: &HashMap<usize, Strin
         response.push_str("No devices configured\n");
     } else {
         let mut sorted: Vec<_> = devices.iter().collect();
-        sorted.sort_by_key(|(id, _)| *id);
+        sorted.sort_by_key(|(id, _)| id.to_string());
         for (id, rig_type) in sorted {
             response.push_str(&format!("{id}: {rig_type}\n"));
         }
@@ -101,7 +104,7 @@ pub async fn run_server(
 
     let mut buf = [0; 1024];
 
-    let mut device_id_to_addr = HashMap::new();
+    let mut device_id_to_addr: HashMap<RigId, SocketAddr> = HashMap::new();
 
     loop {
         let (len, addr) = tokio::select! {
@@ -163,7 +166,7 @@ pub async fn run_server(
 
         match parse_command(trimmed) {
             Ok((device_id, command_name, params)) => {
-                debug!(%addr, device_id, %command_name, ?params, "Received command");
+                debug!(%addr, %device_id, %command_name, ?params, "Received command");
 
                 device_id_to_addr.insert(device_id, addr);
 

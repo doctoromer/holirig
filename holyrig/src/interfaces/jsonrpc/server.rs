@@ -11,16 +11,16 @@ use tracing::{error, info};
 use super::{Notification, RigRpcHandler};
 use crate::interfaces::jsonrpc::{Request, Response, RpcError};
 use crate::resources::Resources;
-use crate::rig_settings::RigSettings;
+use crate::rig_settings::{RigId, RigSettings};
 use crate::serial::manager::{ManagerCommand, ManagerMessage};
 
-type Subscriptions = HashMap<(usize, SocketAddr), Vec<String>>;
+type Subscriptions = HashMap<(RigId, SocketAddr), Vec<String>>;
 
 pub struct JsonRpcServer {
     bind_address: String,
     port: u16,
     handlers: Arc<HashMap<String, RigRpcHandler>>,
-    rigs_state: Arc<RwLock<HashMap<usize, (String, bool)>>>,
+    rigs_state: Arc<RwLock<HashMap<RigId, (String, bool)>>>,
     registered_status: Arc<RwLock<Subscriptions>>,
     manager_rx: broadcast::Receiver<ManagerMessage>,
 }
@@ -45,7 +45,7 @@ impl JsonRpcServer {
             })
             .collect();
 
-        let rigs_state: HashMap<usize, (String, bool)> = initial_rigs
+        let rigs_state: HashMap<RigId, (String, bool)> = initial_rigs
             .iter()
             .map(|rig| (rig.id, (rig.rig_type.clone(), false)))
             .collect();

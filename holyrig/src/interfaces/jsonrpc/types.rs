@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::RpcError;
+use crate::rig_settings::RigId;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(untagged)]
@@ -22,11 +23,11 @@ pub struct Request {
 }
 
 impl Request {
-    pub fn get_rig_id(&self) -> Option<usize> {
+    pub fn get_rig_id(&self) -> Option<RigId> {
         if let Some(Value::Object(params)) = &self.params
             && let Some(Value::Number(id)) = params.get("rig_id")
         {
-            Some(id.as_u64()? as usize)
+            Some(serde_json::from_value(Value::Number(id.clone())).ok()?)
         } else {
             None
         }

@@ -10,6 +10,7 @@ use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::Sender;
 use tracing::{error, info, warn};
 
+use crate::rig_settings::RigId;
 use crate::serial::ManagerCommand;
 use crate::serial::manager::ManagerMessage;
 
@@ -271,7 +272,7 @@ async fn handle_client(
 
                 if let Err(e) = command_sender
                     .send(ManagerCommand::ExecuteCommand {
-                        device_id: 0, // TODO: Support multiple devices
+                        device_id: RigId::default(), // TODO: Support multiple devices
                         command_name: command_name.to_string(),
                         params,
                         response_channel: None,

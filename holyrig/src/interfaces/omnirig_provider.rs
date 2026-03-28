@@ -8,7 +8,7 @@ use tokio::sync::mpsc::Sender;
 use tracing::error;
 
 use crate::resources::Resources;
-use crate::rig_settings::RigSettings;
+use crate::rig_settings::{RigId, RigSettings};
 use crate::runtime::RigFile;
 use crate::runtime::Value;
 use crate::serial::ManagerCommand;
@@ -142,6 +142,7 @@ fn rigparam_to_vfo_args(param: RigParamX) -> Option<(&'static str, &'static str)
 pub struct HolyRigProvider {
     command_sender: Sender<ManagerCommand>,
     statuses: [Arc<RwLock<CachedStatus>>; 2],
+    rig_ids: [Option<RigId>; 2],
     tokio_runtime: tokio::runtime::Handle,
 }
 
@@ -158,52 +159,64 @@ impl HolyRigProvider {
             Arc::new(RwLock::new(CachedStatus::default())),
         ];
 
-        for rig in initial_rigs {
+        let mut rig_ids: [Option<RigId>; 2] = [None; 2];
+        for (i, rig) in initial_rigs.iter().take(2).enumerate() {
+            rig_ids[i] = Some(rig.id);
             if let Some(interpreter) = resources.rigs.get(&rig.rig_type) {
                 let rig_file = interpreter.rig_file();
                 let modes = compute_supported_modes(rig_file);
                 let readable = compute_readable_params(rig_file);
-                if let Some(status) = statuses.get(rig.id) {
-                    let mut status = status.write();
-                    status.supported_modes = modes;
-                    status.readable_params = readable;
-                }
+                let mut status = statuses[i].write();
+                status.supported_modes = modes;
+                status.readable_params = readable;
             }
         }
 
         let statuses_clone = statuses.clone();
+        let rig_ids_clone = rig_ids;
         tokio_runtime.spawn(async move {
             loop {
                 match message_receiver.recv().await {
                     Ok(ManagerMessage::StatusUpdate { device_id, values }) => {
-                        if let Some(status) = statuses_clone.get(device_id) {
-                            let mut s = status.write();
-                            s.connected = true;
-                            for (name, value) in values {
-                                match (name.as_str(), &value) {
-                                    ("freq_a", Value::Integer(f)) => s.freq_a = *f as i32,
-                                    ("freq_b", Value::Integer(f)) => s.freq_b = *f as i32,
-                                    ("mode", Value::String(m)) => s.mode = m.clone(),
-                                    ("vfo", Value::String(v)) => s.vfo = v.clone(),
-                                    ("cw_pitch", Value::Integer(p)) => s.cw_pitch = *p as i32,
-                                    ("transmit", Value::Boolean(t)) => s.transmit = *t,
-                                    ("split", Value::Boolean(sp)) => s.split = *sp,
-                                    ("rit", Value::Boolean(r)) => s.rit = *r,
-                                    ("xit", Value::Boolean(x)) => s.xit = *x,
-                                    ("rit_offset", Value::Integer(o)) => s.rit_offset = *o as i32,
-                                    _ => {}
+                        let slot = rig_ids_clone.iter().position(|id| *id == Some(device_id));
+                        if let Some(slot) = slot {
+                            if let Some(status) = statuses_clone.get(slot) {
+                                let mut s = status.write();
+                                s.connected = true;
+                                for (name, value) in values {
+                                    match (name.as_str(), &value) {
+                                        ("freq_a", Value::Integer(f)) => s.freq_a = *f as i32,
+                                        ("freq_b", Value::Integer(f)) => s.freq_b = *f as i32,
+                                        ("mode", Value::String(m)) => s.mode = m.clone(),
+                                        ("vfo", Value::String(v)) => s.vfo = v.clone(),
+                                        ("cw_pitch", Value::Integer(p)) => s.cw_pitch = *p as i32,
+                                        ("transmit", Value::Boolean(t)) => s.transmit = *t,
+                                        ("split", Value::Boolean(sp)) => s.split = *sp,
+                                        ("rit", Value::Boolean(r)) => s.rit = *r,
+                                        ("xit", Value::Boolean(x)) => s.xit = *x,
+                                        ("rit_offset", Value::Integer(o)) => {
+                                            s.rit_offset = *o as i32
+                                        }
+                                        _ => {}
+                                    }
                                 }
                             }
                         }
                     }
                     Ok(ManagerMessage::DeviceConnected { device_id, .. }) => {
-                        if let Some(status) = statuses_clone.get(device_id) {
-                            status.write().connected = true;
+                        let slot = rig_ids_clone.iter().position(|id| *id == Some(device_id));
+                        if let Some(slot) = slot {
+                            if let Some(status) = statuses_clone.get(slot) {
+                                status.write().connected = true;
+                            }
                         }
                     }
                     Ok(ManagerMessage::DeviceDisconnected { device_id }) => {
-                        if let Some(status) = statuses_clone.get(device_id) {
-                            status.write().connected = false;
+                        let slot = rig_ids_clone.iter().position(|id| *id == Some(device_id));
+                        if let Some(slot) = slot {
+                            if let Some(status) = statuses_clone.get(slot) {
+                                status.write().connected = false;
+                            }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -219,15 +232,17 @@ impl HolyRigProvider {
         Self {
             command_sender,
             statuses,
+            rig_ids,
             tokio_runtime,
         }
     }
 
-    fn create_rig(&self, device_id: usize) -> Box<dyn RigControl> {
+    fn create_rig(&self, slot: usize) -> Box<dyn RigControl> {
+        let device_id = self.rig_ids[slot].expect("Rig slot not populated");
         Box::new(HolyRigControl {
             device_id,
             command_sender: self.command_sender.clone(),
-            status: self.statuses[device_id].clone(),
+            status: self.statuses[slot].clone(),
             tokio_runtime: self.tokio_runtime.clone(),
         })
     }
@@ -244,7 +259,7 @@ impl OmniRigProvider for HolyRigProvider {
 }
 
 struct HolyRigControl {
-    device_id: usize,
+    device_id: RigId,
     command_sender: Sender<ManagerCommand>,
     status: Arc<RwLock<CachedStatus>>,
     tokio_runtime: tokio::runtime::Handle,

@@ -1,6 +1,16 @@
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RigId(usize);
+
+impl std::fmt::Display for RigId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BaudRate {
     #[default]
@@ -113,7 +123,7 @@ impl Display for StopBits {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RigSettings {
-    pub id: usize,
+    pub id: RigId,
     #[serde(default = "default_rig_type")]
     pub rig_type: String,
     pub port: String,
@@ -162,28 +172,68 @@ impl RigSettings {
 
         Ok(())
     }
-
-    pub fn with_id(mut self, id: usize) -> Self {
-        self.id = id;
-        self
-    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Settings {
-    pub rigs: Vec<RigSettings>,
+    rigs: Vec<RigSettings>,
+    #[serde(skip)]
+    next_id: usize,
+}
+
+impl Settings {
+    fn compute_next_id(rigs: &[RigSettings]) -> usize {
+        rigs.iter().map(|r| r.id.0).max().map_or(0, |m| m + 1)
+    }
+
+    pub fn get_rig(&self, id: RigId) -> Option<&RigSettings> {
+        self.rigs.iter().find(|r| r.id == id)
+    }
+
+    pub fn get_rig_mut(&mut self, id: RigId) -> Option<&mut RigSettings> {
+        self.rigs.iter_mut().find(|r| r.id == id)
+    }
+
+    pub fn add_rig(&mut self, mut settings: RigSettings) -> RigId {
+        let id = RigId(self.next_id);
+        self.next_id += 1;
+        settings.id = id;
+        self.rigs.push(settings);
+        id
+    }
+
+    pub fn remove_rig(&mut self, id: RigId) -> Option<RigSettings> {
+        let pos = self.rigs.iter().position(|r| r.id == id)?;
+        Some(self.rigs.remove(pos))
+    }
+
+    pub fn rigs(&self) -> impl Iterator<Item = &RigSettings> {
+        self.rigs.iter()
+    }
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self {
-            rigs: vec![Default::default()],
-        }
+        let rigs = vec![RigSettings::default()];
+        let next_id = Self::compute_next_id(&rigs);
+        Self { rigs, next_id }
     }
 }
 
-impl From<Vec<RigSettings>> for Settings {
-    fn from(rigs: Vec<RigSettings>) -> Self {
-        Self { rigs }
+impl<'de> Deserialize<'de> for Settings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            rigs: Vec<RigSettings>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        let next_id = Settings::compute_next_id(&raw.rigs);
+        Ok(Settings {
+            rigs: raw.rigs,
+            next_id,
+        })
     }
 }

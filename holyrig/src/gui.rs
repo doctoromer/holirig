@@ -1,5 +1,5 @@
 use crate::{
-    rig_settings::{BaudRate, DataBits, RigSettings, StopBits},
+    rig_settings::{BaudRate, DataBits, RigId, RigSettings, StopBits},
     serial::ManagerCommand,
     serial::manager::{ManagerMessage, SerialPortEntry},
 };
@@ -26,9 +26,9 @@ struct AppTabViewer<'a> {
     available_ports: Vec<SerialPortEntry>,
     sender: Sender<ManagerCommand>,
     error_message: Option<String>,
-    active_tab_id: Option<usize>,
-    device_status: &'a HashMap<usize, PortStatus>,
-    remove_device_ids: Vec<usize>,
+    active_tab_id: Option<RigId>,
+    device_status: &'a HashMap<RigId, PortStatus>,
+    remove_device_ids: Vec<RigId>,
 }
 
 impl<'a> AppTabViewer<'a> {
@@ -36,8 +36,8 @@ impl<'a> AppTabViewer<'a> {
         sender: Sender<ManagerCommand>,
         rig_types: Vec<String>,
         available_ports: Vec<SerialPortEntry>,
-        active_tab_id: Option<usize>,
-        device_status: &'a HashMap<usize, PortStatus>,
+        active_tab_id: Option<RigId>,
+        device_status: &'a HashMap<RigId, PortStatus>,
     ) -> Self {
         AppTabViewer {
             current_index: 0,
@@ -249,8 +249,7 @@ struct AppTabs {
     rig_types: Vec<String>,
     available_ports: Vec<SerialPortEntry>,
     sender: Sender<ManagerCommand>,
-    current_device_id: usize,
-    device_status: HashMap<usize, PortStatus>,
+    device_status: HashMap<RigId, PortStatus>,
 }
 
 impl AppTabs {
@@ -261,18 +260,14 @@ impl AppTabs {
             rig_types,
             available_ports: Vec::new(),
             sender,
-            current_device_id: 0,
             device_status: HashMap::new(),
         }
     }
 
     fn set_tabs(&mut self, settings: Vec<RigSettings>) {
         if settings.is_empty() {
-            self.current_device_id = 0;
-            self.dock_state =
-                DockState::new(vec![RigSettings::default().with_id(self.current_device_id)]);
+            self.dock_state = DockState::new(vec![RigSettings::default()]);
         } else {
-            self.current_device_id = settings.iter().map(|rig| rig.id).max().unwrap();
             self.dock_state = DockState::new(settings);
         }
     }
@@ -315,10 +310,9 @@ impl AppTabs {
         }
 
         if add_tab {
-            self.current_device_id += 1;
             self.dock_state
                 .main_surface_mut()
-                .push_to_first_leaf(RigSettings::default().with_id(self.current_device_id));
+                .push_to_first_leaf(RigSettings::default());
         }
     }
 }

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::interfaces::jsonrpc::types::Id;
+use crate::rig_settings::RigId;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RpcError {
@@ -100,7 +101,7 @@ impl RpcError {
         Self::new(Self::MISSING_RIG_ID, "Missing rig id")
     }
 
-    pub fn unknown_rig_id(rig_id: usize) -> Self {
+    pub fn unknown_rig_id(rig_id: RigId) -> Self {
         Self::new(Self::UNKNOWN_RIG_ID, format!("Unknown rig id: {rig_id}"))
     }
 

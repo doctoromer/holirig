@@ -5,6 +5,7 @@ use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
 
 use super::{Request, Response, RpcError};
+use crate::rig_settings::RigId;
 use crate::runtime::{RigFile, SchemaFile};
 use crate::serial::manager::ManagerCommand;
 
@@ -87,7 +88,7 @@ impl RigRpcHandler {
 
     async fn execute_command(
         &self,
-        rig_id: usize,
+        rig_id: RigId,
         command: String,
         params: HashMap<String, Value>,
     ) -> Result<Value> {
@@ -137,7 +138,7 @@ impl RigRpcHandler {
         Ok(response.into())
     }
 
-    pub async fn handle_request(&self, request: &Request, rig_id: usize) -> Result<Response> {
+    pub async fn handle_request(&self, request: &Request, rig_id: RigId) -> Result<Response> {
         let response = match request.method.as_str() {
             "get_capabilities" => {
                 let result = self.get_capabilities()?;
