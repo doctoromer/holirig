@@ -311,6 +311,10 @@ impl DeviceManager {
     async fn handle_manager_command(&mut self, manager_command: ManagerCommand) -> Result<()> {
         match manager_command {
             ManagerCommand::CreateOrUpdateDevice { settings } => {
+                if self.settings.get_rig(settings.id) == Some(&settings) {
+                    return Ok(());
+                }
+
                 self.devices.remove(&settings.id);
 
                 let device_id =

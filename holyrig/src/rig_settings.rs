@@ -121,7 +121,7 @@ impl Display for StopBits {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RigSettings {
     pub id: RigId,
     #[serde(default = "default_rig_type")]
