@@ -19,6 +19,7 @@ path = "src/bin/parser.rs"
 [dependencies]
 anyhow = "1.0.97"
 argh = "0.1.12"
+holyrig-console = { path = "../holyrig-console" }
 dirs = "6.0"
 eframe = "0.32.0"
 egui = "0.32.0"

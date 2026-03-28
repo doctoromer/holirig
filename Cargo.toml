@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["auto-dispatch", "holyrig", "omnirig", "rig-test"]
+members = ["auto-dispatch", "holyrig", "holyrig-console", "omnirig", "rig-test"]
 exclude = []
 
 [workspace.dependencies]

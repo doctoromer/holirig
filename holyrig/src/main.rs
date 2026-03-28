@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use argh::FromArgs;
 use eframe::egui;
 use holyrig::interfaces::jsonrpc::JsonRpcServer;
 use holyrig::resources::{ResourceError, Resources};
@@ -11,6 +12,28 @@ use holyrig::interfaces::{rigctld, udp_server};
 use holyrig::{gui, serial};
 
 use serial::manager::DeviceManager;
+
+/// HolyRig - radio rig control
+#[derive(FromArgs)]
+struct Cli {
+    #[argh(subcommand)]
+    command: Option<SubCommand>,
+}
+
+#[derive(FromArgs)]
+#[argh(subcommand)]
+enum SubCommand {
+    Console(ConsoleCommand),
+}
+
+/// Launch the interactive JSON-RPC console
+#[derive(FromArgs)]
+#[argh(subcommand, name = "console")]
+struct ConsoleCommand {
+    /// server address
+    #[argh(option, default = "\"127.0.0.1:5973\".parse().unwrap()")]
+    addr: std::net::SocketAddr,
+}
 
 fn init_tracing() -> (
     tracing_appender::non_blocking::WorkerGuard,
@@ -45,6 +68,12 @@ fn init_tracing() -> (
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let cli: Cli = argh::from_env();
+
+    if let Some(SubCommand::Console(cmd)) = cli.command {
+        return holyrig_console::run(cmd.addr).await;
+    }
+
     let _guards = init_tracing();
 
     let resources = match Resources::load() {
