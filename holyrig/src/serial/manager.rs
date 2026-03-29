@@ -1,17 +1,16 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, oneshot};
-use tokio::time::{Duration, sleep};
-use tracing::{debug, error, info, warn};
+use tokio::time::Duration;
+use tracing::{error, info};
 
 use crate::resources::Resources;
 use crate::rig_settings::{RigId, RigSettings, Settings};
-use crate::runtime::ExternalApi;
-use crate::runtime::{Interpreter, Value};
-use crate::serial::device::{DeviceCommand, DeviceMessage, SerialDevice};
+use crate::runtime::Value;
+use crate::serial::device::{DeviceTask, DeviceTaskCommand, SerialDevice};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SerialPortEntry {
@@ -80,97 +79,28 @@ pub enum ManagerMessage {
     AvailablePorts(Vec<SerialPortEntry>),
 }
 
-pub struct DeviceManager {
-    resources: Arc<Resources>,
-    devices: HashMap<RigId, Device>,
-    settings: Settings,
-    data_dir: PathBuf,
-
-    // manager -> ...
-    manager_message_tx: broadcast::Sender<ManagerMessage>,
-
-    // ... -> manager
-    manager_command_tx: mpsc::Sender<ManagerCommand>,
-    manager_command_rx: mpsc::Receiver<ManagerCommand>,
-
-    // devices -> manager
-    device_tx: mpsc::Sender<DeviceMessage>,
-    device_rx: mpsc::Receiver<DeviceMessage>,
-
-    prev_ports: Vec<SerialPortEntry>,
-}
-
-#[derive(Clone)]
-struct Device {
-    // Manager to devices channel
-    command_tx: mpsc::Sender<DeviceCommand>,
-    rig_wrapper: Interpreter,
+struct DeviceHandle {
+    task_command_tx: mpsc::Sender<DeviceTaskCommand>,
     settings: RigSettings,
 }
 
-struct DeviceExternalApi {
-    command_tx: mpsc::Sender<DeviceCommand>,
-    status_values: Arc<Mutex<HashMap<String, Value>>>,
-}
+pub struct DeviceManager {
+    resources: Arc<Resources>,
+    devices: HashMap<RigId, DeviceHandle>,
+    settings: Settings,
+    data_dir: PathBuf,
 
-impl DeviceExternalApi {
-    fn new(command_tx: mpsc::Sender<DeviceCommand>) -> Self {
-        Self {
-            command_tx,
-            status_values: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
+    manager_message_tx: broadcast::Sender<ManagerMessage>,
 
-    fn get_status_values(&self) -> HashMap<String, Value> {
-        self.status_values.lock().unwrap().clone()
-    }
+    manager_command_tx: mpsc::Sender<ManagerCommand>,
+    manager_command_rx: mpsc::Receiver<ManagerCommand>,
 
-    fn clear_status_values(&self) {
-        self.status_values.lock().unwrap().clear();
-    }
-}
-
-impl ExternalApi for DeviceExternalApi {
-    async fn write(&self, data: &[u8]) -> Result<()> {
-        self.command_tx
-            .send(DeviceCommand::Write {
-                data: data.to_vec(),
-            })
-            .await
-            .context("Failed to send write command to device")
-    }
-
-    async fn read(&self, length: usize) -> Result<Vec<u8>> {
-        let (read_tx, mut read_rx) = mpsc::channel(1);
-
-        self.command_tx
-            .send(DeviceCommand::ReadExact {
-                length,
-                response_tx: read_tx,
-            })
-            .await
-            .context("Failed to send read command to device")?;
-
-        read_rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("Device disconnected"))?
-    }
-
-    fn set_var(&self, var: &str, value: Value) -> Result<()> {
-        self.status_values
-            .lock()
-            .unwrap()
-            .insert(var.to_string(), value);
-        Ok(())
-    }
+    prev_ports: Vec<SerialPortEntry>,
 }
 
 impl DeviceManager {
     pub fn new(resources: Arc<Resources>) -> Self {
         let (manager_command_tx, manager_command_rx) = mpsc::channel(10);
-        let (device_tx, device_rx) = mpsc::channel(10);
-
         let (manager_message_tx, _) = broadcast::channel(10);
 
         let data_dir = dirs::data_dir()
@@ -200,8 +130,6 @@ impl DeviceManager {
             manager_message_tx,
             manager_command_tx,
             manager_command_rx,
-            device_tx,
-            device_rx,
             prev_ports: Vec::new(),
         }
     }
@@ -223,87 +151,6 @@ impl DeviceManager {
         for settings in rigs {
             if let Err(err) = self.add_device(settings.id, settings.clone()).await {
                 error!(rig_id = %settings.id, %err, "Failed to load rig");
-            }
-        }
-    }
-
-    fn handle_device_message(&mut self, device_message: DeviceMessage) {
-        match device_message {
-            DeviceMessage::Connected { device_id } => {
-                let Some(device) = self.devices.get(&device_id).cloned() else {
-                    warn!(%device_id, "Unknown device connected");
-                    return;
-                };
-                let rig_model = device.settings.rig_type.clone();
-                let poll_interval = device.settings.poll_interval;
-                let manager_tx = self.manager_message_tx.clone();
-
-                info!(%device_id, %rig_model, "Device connected, initializing");
-
-                tokio::spawn(async move {
-                    let external_api = DeviceExternalApi::new(device.command_tx.clone());
-                    let init_result = device.rig_wrapper.execute_init(&external_api).await;
-
-                    if let Err(ref err) = init_result {
-                        error!(%device_id, %err, "Device initialization failed");
-                    } else {
-                        info!(%device_id, "Device initialized");
-                    }
-
-                    let _ = manager_tx.send(ManagerMessage::DeviceConnected {
-                        device_id,
-                        rig_model,
-                    });
-
-                    if init_result.is_err() {
-                        return;
-                    }
-
-                    let mut previous_values = HashMap::new();
-                    loop {
-                        sleep(Duration::from_millis(poll_interval as u64)).await;
-
-                        let values = match DeviceManager::execute_status_commands(&device).await {
-                            Ok(v) => v,
-                            Err(err) => {
-                                error!(%device_id, %err, "Status polling failed");
-                                break;
-                            }
-                        };
-
-                        let changed_values: HashMap<String, Value> = values
-                            .iter()
-                            .filter(|(name, value)| {
-                                previous_values
-                                    .get(*name)
-                                    .map(|prev_value| prev_value != *value)
-                                    .unwrap_or(true)
-                            })
-                            .map(|(name, value)| (name.clone(), value.clone()))
-                            .collect();
-
-                        if !changed_values.is_empty() {
-                            debug!(%device_id, ?changed_values, "Status update");
-                            let _ = manager_tx.send(ManagerMessage::StatusUpdate {
-                                device_id,
-                                values: changed_values,
-                            });
-                        }
-                        previous_values = values;
-                    }
-                });
-            }
-            DeviceMessage::Disconnected { device_id } => {
-                info!(%device_id, "Device disconnected");
-                let _ = self
-                    .manager_message_tx
-                    .send(ManagerMessage::DeviceDisconnected { device_id });
-            }
-            DeviceMessage::Error { device_id, error } => {
-                error!(%device_id, %error, "Device failed");
-                let _ = self
-                    .manager_message_tx
-                    .send(ManagerMessage::DeviceError { device_id, error });
             }
         }
     }
@@ -339,29 +186,15 @@ impl DeviceManager {
                 params,
                 response_channel,
             } => {
-                if let Some(device) = self.devices.get(&device_id).cloned() {
-                    debug!(%device_id, %command_name, ?params, "Executing command");
-                    tokio::spawn(async move {
-                        let external_api = DeviceExternalApi::new(device.command_tx.clone());
-                        let result = device
-                            .rig_wrapper
-                            .execute_command(&command_name, params, &external_api)
-                            .await;
-
-                        let response = match result {
-                            Ok(values) => {
-                                debug!(%device_id, %command_name, ?values, "Command succeeded");
-                                CommandResponse::Success(values)
-                            }
-                            Err(err) => {
-                                error!(%device_id, %command_name, %err, "Command failed");
-                                CommandResponse::Error(err.to_string())
-                            }
-                        };
-                        if let Some(tx) = response_channel {
-                            let _ = tx.send(response);
-                        }
-                    });
+                if let Some(handle) = self.devices.get(&device_id) {
+                    let _ = handle
+                        .task_command_tx
+                        .send(DeviceTaskCommand::ExecuteCommand {
+                            command_name,
+                            params,
+                            response_tx: response_channel,
+                        })
+                        .await;
                 } else {
                     error!(%device_id, "Device not found");
                     if let Some(tx) = response_channel {
@@ -375,13 +208,16 @@ impl DeviceManager {
                 let devices: HashMap<RigId, String> = self
                     .devices
                     .iter()
-                    .map(|(id, device)| (*id, device.settings.rig_type.clone()))
+                    .map(|(id, handle)| (*id, handle.settings.rig_type.clone()))
                     .collect();
                 let _ = response_channel.send(devices);
             }
             ManagerCommand::RemoveDevice { device_id } => {
-                if let Some(device) = self.devices.remove(&device_id) {
-                    let _ = device.command_tx.send(DeviceCommand::Shutdown).await;
+                if let Some(handle) = self.devices.remove(&device_id) {
+                    let _ = handle
+                        .task_command_tx
+                        .send(DeviceTaskCommand::Shutdown)
+                        .await;
                 }
 
                 self.settings.remove_rig(device_id);
@@ -400,9 +236,6 @@ impl DeviceManager {
 
         loop {
             tokio::select! {
-                Some(device_message) = self.device_rx.recv() => {
-                    self.handle_device_message(device_message);
-                },
                 Some(manager_command) = self.manager_command_rx.recv() => {
                     self.handle_manager_command(manager_command).await?
                 },
@@ -452,57 +285,46 @@ impl DeviceManager {
         }
     }
 
-    async fn execute_status_commands(device: &Device) -> Result<HashMap<String, Value>> {
-        let external_api = DeviceExternalApi::new(device.command_tx.clone());
-        external_api.clear_status_values();
-        device.rig_wrapper.execute_status(&external_api).await?;
-        Ok(external_api.get_status_values())
-    }
-
     pub async fn add_device(&mut self, device_id: RigId, settings: RigSettings) -> Result<()> {
-        let rig_wrapper = self
+        let interpreter = self
             .resources
             .rigs
             .get(&settings.rig_type)
             .context("Unknown rig type")?
             .clone();
         info!(%device_id, rig_type = %settings.rig_type, port = %settings.port, "Opening device");
-        let (serial_device, command_rx) =
-            SerialDevice::new(device_id, settings.clone(), self.device_tx.clone()).await?;
 
-        let id = settings.id;
+        let (serial_message_tx, serial_message_rx) = mpsc::channel(8);
+        let (serial_device, serial_command_tx, serial_command_rx) =
+            SerialDevice::new(device_id, settings.clone(), serial_message_tx)?;
 
-        let device = Device {
-            command_tx: serial_device.command_sender(),
-            rig_wrapper,
-            settings,
-        };
+        let (task_command_tx, task_command_rx) = mpsc::channel(16);
 
-        self.devices.insert(device_id, device);
+        let device_task = DeviceTask::new(
+            device_id,
+            settings.clone(),
+            interpreter,
+            serial_command_tx,
+            self.manager_message_tx.clone(),
+        );
 
-        let device_tx = self.device_tx.clone();
         tokio::spawn(async move {
-            let device_id = id;
-
-            device_tx
-                .send(DeviceMessage::Connected { device_id })
-                .await
-                .unwrap();
-
-            if let Err(err) = serial_device.run(command_rx).await {
-                device_tx
-                    .send(DeviceMessage::Error {
-                        device_id,
-                        error: err.to_string(),
-                    })
-                    .await
-                    .unwrap();
+            if let Err(err) = serial_device.run(serial_command_rx).await {
+                error!(%err, "Serial device task failed");
             }
-            device_tx
-                .send(DeviceMessage::Disconnected { device_id })
-                .await
-                .unwrap();
         });
+
+        tokio::spawn(async move {
+            device_task.run(task_command_rx, serial_message_rx).await;
+        });
+
+        self.devices.insert(
+            device_id,
+            DeviceHandle {
+                task_command_tx,
+                settings,
+            },
+        );
 
         Ok(())
     }

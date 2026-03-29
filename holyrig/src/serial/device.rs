@@ -1,12 +1,16 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serialport::SerialPort;
+use std::collections::HashMap;
+use std::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::mpsc;
-use tokio::time::{Duration, sleep};
+use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::time::{Duration, interval, sleep};
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::rig_settings::{DataBits, RigId, RigSettings, StopBits};
+use crate::runtime::{ExternalApi, Interpreter, Value};
+use crate::serial::manager::{CommandResponse, ManagerMessage};
 
 #[derive(Debug)]
 pub enum DeviceCommand {
@@ -22,25 +26,28 @@ pub enum DeviceCommand {
 
 #[derive(Debug)]
 pub enum DeviceMessage {
-    Error { device_id: RigId, error: String },
-    Disconnected { device_id: RigId },
-    Connected { device_id: RigId },
+    Disconnected,
+    Reconnected,
+    Error(String),
 }
 
 pub struct SerialDevice {
     id: RigId,
     port: Option<SerialStream>,
     settings: RigSettings,
-    command_tx: mpsc::Sender<DeviceCommand>,
-    device_tx: mpsc::Sender<DeviceMessage>,
+    message_tx: mpsc::Sender<DeviceMessage>,
 }
 
 impl SerialDevice {
-    pub async fn new(
+    pub fn new(
         id: RigId,
         settings: RigSettings,
-        device_tx: mpsc::Sender<DeviceMessage>,
-    ) -> Result<(Self, mpsc::Receiver<DeviceCommand>)> {
+        message_tx: mpsc::Sender<DeviceMessage>,
+    ) -> Result<(
+        Self,
+        mpsc::Sender<DeviceCommand>,
+        mpsc::Receiver<DeviceCommand>,
+    )> {
         let port = Self::open_port(&settings)?;
         let (command_tx, command_rx) = mpsc::channel(32);
 
@@ -49,9 +56,9 @@ impl SerialDevice {
                 id,
                 port: Some(port),
                 settings,
-                command_tx,
-                device_tx,
+                message_tx,
             },
+            command_tx,
             command_rx,
         ))
     }
@@ -90,14 +97,12 @@ impl SerialDevice {
         result.with_context(|| format!("Failed to open serial port {}", settings.port))
     }
 
-    pub fn command_sender(&self) -> mpsc::Sender<DeviceCommand> {
-        self.command_tx.clone()
-    }
-
     async fn attempt_reconnect(&mut self) -> Result<()> {
         warn!(device_id = %self.id, port = %self.settings.port, "Disconnected, attempting to reconnect");
+
         // Drop the old port immediately so the kernel releases the device node.
-        self.port.take();
+        let _ = self.port.take();
+
         loop {
             sleep(Duration::from_millis(self.settings.poll_interval as u64)).await;
             if let Ok(new_port) = Self::open_port(&self.settings) {
@@ -106,10 +111,7 @@ impl SerialDevice {
                 }
                 self.port = Some(new_port);
                 info!(device_id = %self.id, port = %self.settings.port, "Reconnected");
-                self.device_tx
-                    .send(DeviceMessage::Connected { device_id: self.id })
-                    .await
-                    .ok();
+                self.message_tx.send(DeviceMessage::Reconnected).await.ok();
                 return Ok(());
             }
         }
@@ -163,19 +165,233 @@ impl SerialDevice {
     }
 
     async fn handle_error(&mut self) {
-        self.device_tx
-            .send(DeviceMessage::Disconnected { device_id: self.id })
-            .await
-            .ok();
+        self.message_tx.send(DeviceMessage::Disconnected).await.ok();
 
         if let Err(reconnect_err) = self.attempt_reconnect().await {
-            self.device_tx
-                .send(DeviceMessage::Error {
-                    device_id: self.id,
-                    error: reconnect_err.to_string(),
-                })
+            self.message_tx
+                .send(DeviceMessage::Error(reconnect_err.to_string()))
                 .await
                 .ok();
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum DeviceTaskCommand {
+    ExecuteCommand {
+        command_name: String,
+        params: HashMap<String, String>,
+        response_tx: Option<oneshot::Sender<CommandResponse>>,
+    },
+    Shutdown,
+}
+
+struct DeviceExternalApi {
+    command_tx: mpsc::Sender<DeviceCommand>,
+    status_values: Mutex<HashMap<String, Value>>,
+}
+
+impl DeviceExternalApi {
+    fn new(command_tx: mpsc::Sender<DeviceCommand>) -> Self {
+        Self {
+            command_tx,
+            status_values: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn take_status_values(&self) -> HashMap<String, Value> {
+        std::mem::take(&mut *self.status_values.lock().unwrap())
+    }
+}
+
+impl ExternalApi for DeviceExternalApi {
+    async fn write(&self, data: &[u8]) -> Result<()> {
+        self.command_tx
+            .send(DeviceCommand::Write {
+                data: data.to_vec(),
+            })
+            .await
+            .context("Failed to send write command to device")
+    }
+
+    async fn read(&self, length: usize) -> Result<Vec<u8>> {
+        let (read_tx, mut read_rx) = mpsc::channel(1);
+
+        self.command_tx
+            .send(DeviceCommand::ReadExact {
+                length,
+                response_tx: read_tx,
+            })
+            .await
+            .context("Failed to send read command to device")?;
+
+        read_rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("Device disconnected"))?
+    }
+
+    fn set_var(&self, var: &str, value: Value) -> Result<()> {
+        self.status_values
+            .lock()
+            .unwrap()
+            .insert(var.to_string(), value);
+        Ok(())
+    }
+}
+
+pub struct DeviceTask {
+    id: RigId,
+    settings: RigSettings,
+    interpreter: Interpreter,
+    serial_command_tx: mpsc::Sender<DeviceCommand>,
+    previous_values: HashMap<String, Value>,
+    manager_tx: broadcast::Sender<ManagerMessage>,
+}
+
+impl DeviceTask {
+    pub fn new(
+        id: RigId,
+        settings: RigSettings,
+        interpreter: Interpreter,
+        serial_command_tx: mpsc::Sender<DeviceCommand>,
+        manager_tx: broadcast::Sender<ManagerMessage>,
+    ) -> Self {
+        Self {
+            id,
+            settings,
+            interpreter,
+            serial_command_tx,
+            previous_values: HashMap::new(),
+            manager_tx,
+        }
+    }
+
+    pub async fn run(
+        mut self,
+        mut task_command_rx: mpsc::Receiver<DeviceTaskCommand>,
+        mut serial_message_rx: mpsc::Receiver<DeviceMessage>,
+    ) {
+        self.initialize_and_notify().await;
+
+        let mut poll_interval = interval(Duration::from_millis(self.settings.poll_interval as u64));
+
+        loop {
+            tokio::select! {
+                _ = poll_interval.tick() => {
+                    self.poll_status().await;
+                }
+                cmd = task_command_rx.recv() => {
+                    match cmd {
+                        Some(DeviceTaskCommand::ExecuteCommand {
+                            command_name, params, response_tx
+                        }) => {
+                            self.handle_execute_command(command_name, params, response_tx).await;
+                        }
+                        Some(DeviceTaskCommand::Shutdown) | None => {
+                            let _ = self.serial_command_tx.send(DeviceCommand::Shutdown).await;
+                            break;
+                        }
+                    }
+                }
+                msg = serial_message_rx.recv() => {
+                    match msg {
+                        Some(DeviceMessage::Disconnected) => {
+                            info!(device_id = %self.id, "Device disconnected");
+                            let _ = self.manager_tx.send(ManagerMessage::DeviceDisconnected {
+                                device_id: self.id,
+                            });
+                        }
+                        Some(DeviceMessage::Reconnected) => {
+                            info!(device_id = %self.id, "Device reconnected, re-initializing");
+                            self.initialize_and_notify().await;
+                        }
+                        Some(DeviceMessage::Error(err)) => {
+                            error!(device_id = %self.id, %err, "Serial device error");
+                            let _ = self.manager_tx.send(ManagerMessage::DeviceError {
+                                device_id: self.id,
+                                error: err,
+                            });
+                        }
+                        None => {
+                            warn!(device_id = %self.id, "Serial I/O task exited");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    async fn initialize_and_notify(&self) {
+        let api = DeviceExternalApi::new(self.serial_command_tx.clone());
+        match self.interpreter.execute_init(&api).await {
+            Ok(()) => {
+                info!(device_id = %self.id, "Device initialized");
+                let _ = self.manager_tx.send(ManagerMessage::DeviceConnected {
+                    device_id: self.id,
+                    rig_model: self.settings.rig_type.clone(),
+                });
+            }
+            Err(err) => {
+                error!(device_id = %self.id, %err, "Device initialization failed");
+            }
+        }
+    }
+
+    async fn poll_status(&mut self) {
+        let api = DeviceExternalApi::new(self.serial_command_tx.clone());
+
+        if let Err(err) = self.interpreter.execute_status(&api).await {
+            error!(device_id = %self.id, %err, "Status polling failed");
+            return;
+        }
+
+        let values = api.take_status_values();
+        let changed: HashMap<String, Value> = values
+            .iter()
+            .filter(|(k, v)| {
+                self.previous_values
+                    .get(*k)
+                    .map(|prev| prev != *v)
+                    .unwrap_or(true)
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        if !changed.is_empty() {
+            debug!(device_id = %self.id, ?changed, "Status update");
+            let _ = self.manager_tx.send(ManagerMessage::StatusUpdate {
+                device_id: self.id,
+                values: changed,
+            });
+        }
+        self.previous_values = values;
+    }
+
+    async fn handle_execute_command(
+        &self,
+        command_name: String,
+        params: HashMap<String, String>,
+        response_tx: Option<oneshot::Sender<CommandResponse>>,
+    ) {
+        let api = DeviceExternalApi::new(self.serial_command_tx.clone());
+        let result = self
+            .interpreter
+            .execute_command(&command_name, params, &api)
+            .await;
+        let response = match result {
+            Ok(values) => {
+                debug!(device_id = %self.id, %command_name, ?values, "Command succeeded");
+                CommandResponse::Success(values)
+            }
+            Err(err) => {
+                error!(device_id = %self.id, %command_name, %err, "Command failed");
+                CommandResponse::Error(err.to_string())
+            }
+        };
+        if let Some(tx) = response_tx {
+            let _ = tx.send(response);
         }
     }
 }
