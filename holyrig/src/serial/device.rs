@@ -143,9 +143,8 @@ impl SerialDevice {
         while let Some(cmd) = command_rx.recv().await {
             match cmd {
                 DeviceCommand::Write { data } => {
-                    let result = self.write_only(&data).await;
-                    if result.is_err() {
-                        self.handle_error().await;
+                    if self.write_only(&data).await.is_err() {
+                        self.handle_error(&mut command_rx).await;
                     }
                 }
                 DeviceCommand::ReadExact {
@@ -153,10 +152,11 @@ impl SerialDevice {
                     response_tx,
                 } => {
                     let result = self.read_exact(length).await;
-                    if result.is_err() {
-                        self.handle_error().await;
-                    }
+                    let failed = result.is_err();
                     response_tx.send(result).await.ok();
+                    if failed {
+                        self.handle_error(&mut command_rx).await;
+                    }
                 }
                 DeviceCommand::Shutdown => break,
             }
@@ -164,8 +164,14 @@ impl SerialDevice {
         Ok(())
     }
 
-    async fn handle_error(&mut self) {
+    async fn handle_error(&mut self, command_rx: &mut mpsc::Receiver<DeviceCommand>) {
         self.message_tx.send(DeviceMessage::Disconnected).await.ok();
+
+        while let Ok(cmd) = command_rx.try_recv() {
+            if let DeviceCommand::ReadExact { response_tx, .. } = cmd {
+                let _ = response_tx.try_send(Err(anyhow!("Device disconnected")));
+            }
+        }
 
         if let Err(reconnect_err) = self.attempt_reconnect().await {
             self.message_tx
@@ -247,6 +253,7 @@ pub struct DeviceTask {
     serial_command_tx: mpsc::Sender<DeviceCommand>,
     previous_values: HashMap<String, Value>,
     manager_tx: broadcast::Sender<ManagerMessage>,
+    connected: bool,
 }
 
 impl DeviceTask {
@@ -264,6 +271,7 @@ impl DeviceTask {
             serial_command_tx,
             previous_values: HashMap::new(),
             manager_tx,
+            connected: false,
         }
     }
 
@@ -279,14 +287,20 @@ impl DeviceTask {
         loop {
             tokio::select! {
                 _ = poll_interval.tick() => {
-                    self.poll_status().await;
+                    if self.connected {
+                        self.poll_status().await;
+                    }
                 }
                 cmd = task_command_rx.recv() => {
                     match cmd {
                         Some(DeviceTaskCommand::ExecuteCommand {
                             command_name, params, response_tx
                         }) => {
-                            self.handle_execute_command(command_name, params, response_tx).await;
+                            if self.connected {
+                                self.handle_execute_command(command_name, params, response_tx).await;
+                            } else if let Some(tx) = response_tx {
+                                let _ = tx.send(CommandResponse::Error("Device disconnected".into()));
+                            }
                         }
                         Some(DeviceTaskCommand::Shutdown) | None => {
                             let _ = self.serial_command_tx.send(DeviceCommand::Shutdown).await;
@@ -297,6 +311,7 @@ impl DeviceTask {
                 msg = serial_message_rx.recv() => {
                     match msg {
                         Some(DeviceMessage::Disconnected) => {
+                            self.connected = false;
                             info!(device_id = %self.id, "Device disconnected");
                             let _ = self.manager_tx.send(ManagerMessage::DeviceDisconnected {
                                 device_id: self.id,
@@ -323,10 +338,11 @@ impl DeviceTask {
         }
     }
 
-    async fn initialize_and_notify(&self) {
+    async fn initialize_and_notify(&mut self) {
         let api = DeviceExternalApi::new(self.serial_command_tx.clone());
         match self.interpreter.execute_init(&api).await {
             Ok(()) => {
+                self.connected = true;
                 info!(device_id = %self.id, "Device initialized");
                 let _ = self.manager_tx.send(ManagerMessage::DeviceConnected {
                     device_id: self.id,
