@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use thiserror::Error;
+use tracing::trace;
 
 use super::parser::{
     BinaryOp, DataType, Expr, Id, InterpolationPart, RigFile, Statement, parse_atomic_expr,
@@ -292,6 +293,7 @@ impl Interpreter {
     ) -> Result<(), InterpreterError> {
         if let Some(init) = &self.rig_file.impl_block.init {
             for statement in &init.statements {
+                trace!("Executing: {statement:?}");
                 self.execute_statement(statement, api, env).await?;
             }
         }
