@@ -130,6 +130,12 @@ impl SerialDevice {
     async fn read_exact(&mut self, length: usize) -> Result<Vec<u8>> {
         let mut buf = vec![0u8; length];
         self.port()?.read_exact(&mut buf).await?;
+
+        tokio::time::timeout(
+            Duration::from_millis(self.settings.timeout as u64),
+            self.port()?.read_exact(&mut buf),
+        )
+        .await??;
         Ok(buf)
     }
 
