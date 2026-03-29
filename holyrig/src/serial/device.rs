@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use serialport::SerialPort;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, sleep};
@@ -100,6 +101,9 @@ impl SerialDevice {
         loop {
             sleep(Duration::from_millis(self.settings.poll_interval as u64)).await;
             if let Ok(new_port) = Self::open_port(&self.settings) {
+                if let Err(err) = new_port.clear(serialport::ClearBuffer::All) {
+                    warn!(device_id = %self.id, %err, "Failed to clear serial buffers after reconnect");
+                }
                 self.port = Some(new_port);
                 info!(device_id = %self.id, port = %self.settings.port, "Reconnected");
                 self.device_tx
