@@ -340,32 +340,42 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let mut has_messages = false;
         loop {
             match self.message_receiver.try_recv() {
-                Ok(message) => match message {
-                    ManagerMessage::AvailablePorts(ports) => {
-                        self.tabs.available_ports = ports;
+                Ok(message) => {
+                    has_messages = true;
+                    match message {
+                        ManagerMessage::AvailablePorts(ports) => {
+                            self.tabs.available_ports = ports;
+                        }
+                        ManagerMessage::DeviceConnected { device_id, .. } => {
+                            self.tabs
+                                .device_status
+                                .insert(device_id, PortStatus::Connected);
+                        }
+                        ManagerMessage::DeviceDisconnected { device_id } => {
+                            self.tabs
+                                .device_status
+                                .insert(device_id, PortStatus::Disconnected);
+                        }
+                        ManagerMessage::DeviceError { device_id, error } => {
+                            self.tabs
+                                .device_status
+                                .insert(device_id, PortStatus::Error(error));
+                        }
+                        ManagerMessage::StatusUpdate { .. } => {}
                     }
-                    ManagerMessage::DeviceConnected { device_id, .. } => {
-                        self.tabs
-                            .device_status
-                            .insert(device_id, PortStatus::Connected);
-                    }
-                    ManagerMessage::DeviceDisconnected { device_id } => {
-                        self.tabs
-                            .device_status
-                            .insert(device_id, PortStatus::Disconnected);
-                    }
-                    ManagerMessage::DeviceError { device_id, error } => {
-                        self.tabs
-                            .device_status
-                            .insert(device_id, PortStatus::Error(error));
-                    }
-                    ManagerMessage::StatusUpdate { .. } => {}
-                },
+                }
                 Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
                 Err(_) => break,
             }
+        }
+        if has_messages {
+            ctx.request_repaint();
+        } else {
+            // Repainting every 100ms to process messages
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 
         // TODO
