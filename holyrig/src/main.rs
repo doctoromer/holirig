@@ -53,8 +53,8 @@ fn init_tracing() -> (
         .with_default_directive(tracing::level_filters::LevelFilter::INFO.into())
         .from_env()
         .unwrap()
-        .add_directive("holyrig=info".parse().unwrap())
-        .add_directive("omnirig=info".parse().unwrap());
+        .add_directive("holyrig=trace".parse().unwrap())
+        .add_directive("omnirig=trace".parse().unwrap());
 
     let debug_filter = EnvFilter::builder()
         .with_default_directive(tracing::level_filters::LevelFilter::DEBUG.into())

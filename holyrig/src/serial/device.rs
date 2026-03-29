@@ -3,7 +3,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, sleep};
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::rig_settings::{DataBits, RigId, RigSettings, StopBits};
 
@@ -72,13 +72,21 @@ impl SerialDevice {
             tokio_serial::Parity::None
         };
 
-        tokio_serial::new(&settings.port, settings.baud_rate.into())
+        let result = tokio_serial::new(&settings.port, settings.baud_rate.into())
             .data_bits(data_bits)
             .stop_bits(stop_bits)
             .parity(parity)
             .flow_control(tokio_serial::FlowControl::None)
-            .open_native_async()
-            .with_context(|| format!("Failed to open serial port {}", settings.port))
+            .open_native_async();
+
+        if let Err(err) = &result {
+            error!(
+                "Failed to open device {}: {}",
+                settings.port, err.description
+            );
+        }
+
+        result.with_context(|| format!("Failed to open serial port {}", settings.port))
     }
 
     pub fn command_sender(&self) -> mpsc::Sender<DeviceCommand> {
