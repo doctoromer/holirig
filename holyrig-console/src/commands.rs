@@ -88,17 +88,16 @@ pub fn parse_command(input: &str, app: &App) -> Result<Command, ParseError> {
             let rig_id = parse_rig_id(parts.get(1))?;
             Ok(Command::Status { rig_id })
         }
-        cmd => {
+        command => {
             let rig_id = parse_rig_id(parts.get(1))?;
-            let set_cmd = format!("set_{cmd}");
             let rig = app.rigs.iter().find(|r| r.rig_id == rig_id);
             let caps = rig.and_then(|r| r.capabilities.as_ref());
 
             match caps {
-                Some(caps) => resolve_execute(caps, rig_id, &set_cmd, &parts[2..]),
+                Some(caps) => resolve_execute(caps, rig_id, command, &parts[2..]),
                 None => Ok(Command::Execute {
                     rig_id,
-                    command: set_cmd,
+                    command: command.to_string(),
                     parameters: build_positional_params(&parts[2..]),
                 }),
             }
