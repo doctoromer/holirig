@@ -16,6 +16,10 @@ use serial::manager::DeviceManager;
 /// HolyRig - radio rig control
 #[derive(FromArgs)]
 struct Cli {
+    /// verbose logging (-v debug, -vv trace)
+    #[argh(switch, short = 'v')]
+    verbose: u8,
+
     #[argh(subcommand)]
     command: Option<SubCommand>,
 }
@@ -35,7 +39,9 @@ struct ConsoleCommand {
     addr: std::net::SocketAddr,
 }
 
-fn init_tracing() -> (
+fn init_tracing(
+    verbosity: u8,
+) -> (
     tracing_appender::non_blocking::WorkerGuard,
     tracing_appender::non_blocking::WorkerGuard,
 ) {
@@ -64,7 +70,13 @@ fn init_tracing() -> (
         .add_directive("omnirig=info".parse().unwrap());
 
     Registry::default()
-        .with(tracing_subscriber::fmt::layer().with_filter(EnvFilter::new("info")))
+        .with(
+            tracing_subscriber::fmt::layer().with_filter(match verbosity {
+                0 => EnvFilter::new("info"),
+                1 => debug_filter.clone(),
+                _ => trace_filter.clone(),
+            }),
+        )
         .with(
             tracing_subscriber::fmt::layer()
                 .with_writer(debug_writer)
@@ -88,7 +100,7 @@ async fn main() -> Result<()> {
         return holyrig_console::run(cmd.addr).await;
     }
 
-    let _guards = init_tracing();
+    let _guards = init_tracing(cli.verbose);
 
     let resources = match Resources::load() {
         Ok(resources) => resources,
