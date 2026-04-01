@@ -49,7 +49,7 @@ impl JsonRpcServer {
 
         let rigs_state: HashMap<RigId, (String, bool)> = initial_rigs
             .iter()
-            .map(|rig| (rig.id, (rig.rig_type.clone(), false)))
+            .map(|rig| (rig.id, (rig.config.rig_type.clone(), false)))
             .collect();
 
         Ok(Self {

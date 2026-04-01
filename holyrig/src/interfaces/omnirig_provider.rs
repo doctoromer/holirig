@@ -162,7 +162,7 @@ impl HolyRigProvider {
         let mut rig_ids: [Option<RigId>; 2] = [None; 2];
         for (i, rig) in initial_rigs.iter().take(2).enumerate() {
             rig_ids[i] = Some(rig.id);
-            if let Some(interpreter) = resources.rigs.get(&rig.rig_type) {
+            if let Some(interpreter) = resources.rigs.get(&rig.config.rig_type) {
                 let rig_file = interpreter.rig_file();
                 let modes = compute_supported_modes(rig_file);
                 let readable = compute_readable_params(rig_file);

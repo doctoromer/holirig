@@ -1,5 +1,5 @@
 use crate::{
-    rig_settings::{BaudRate, DataBits, RigId, RigSettings, StopBits},
+    rig_settings::{BaudRate, DataBits, RigConfig, RigId, RigSettings, StopBits},
     serial::ManagerCommand,
     serial::manager::{ManagerMessage, SerialPortEntry},
 };
@@ -12,11 +12,27 @@ use egui_dock::{
 use std::collections::HashMap;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::Sender;
+use tokio::sync::oneshot;
 
 pub enum PortStatus {
     Disconnected,
     Connected,
     Error(String),
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+struct TabId(u64);
+
+fn next_tab_id(counter: &mut u64) -> TabId {
+    let id = TabId(*counter);
+    *counter += 1;
+    id
+}
+
+struct RigTab {
+    tab_id: TabId,
+    rig_id: Option<RigId>,
+    config: RigConfig,
 }
 
 struct AppTabViewer<'a> {
@@ -26,9 +42,10 @@ struct AppTabViewer<'a> {
     available_ports: Vec<SerialPortEntry>,
     sender: Sender<ManagerCommand>,
     error_message: Option<String>,
-    active_tab_id: Option<RigId>,
+    active_tab_id: Option<TabId>,
     device_status: &'a HashMap<RigId, PortStatus>,
     remove_device_ids: Vec<RigId>,
+    pending_creates: &'a mut Vec<(TabId, oneshot::Receiver<RigId>)>,
 }
 
 impl<'a> AppTabViewer<'a> {
@@ -36,8 +53,9 @@ impl<'a> AppTabViewer<'a> {
         sender: Sender<ManagerCommand>,
         rig_types: Vec<String>,
         available_ports: Vec<SerialPortEntry>,
-        active_tab_id: Option<RigId>,
+        active_tab_id: Option<TabId>,
         device_status: &'a HashMap<RigId, PortStatus>,
+        pending_creates: &'a mut Vec<(TabId, oneshot::Receiver<RigId>)>,
     ) -> Self {
         AppTabViewer {
             current_index: 0,
@@ -49,19 +67,22 @@ impl<'a> AppTabViewer<'a> {
             active_tab_id,
             device_status,
             remove_device_ids: Vec::new(),
+            pending_creates,
         }
     }
 }
 
 impl<'a> TabViewer for AppTabViewer<'a> {
-    type Tab = RigSettings;
+    type Tab = RigTab;
 
     fn title(&mut self, _tab: &mut Self::Tab) -> egui::WidgetText {
         self.current_index += 1;
         format!("RIG {}", self.current_index).as_str().into()
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, rig: &mut Self::Tab) {
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        let config = &mut tab.config;
+
         ui.group(|ui| {
             if let Some(error) = &self.error_message {
                 ui.colored_label(egui::Color32::RED, error);
@@ -73,11 +94,11 @@ impl<'a> TabViewer for AppTabViewer<'a> {
             Grid::new("rig_settings").num_columns(2).show(ui, |ui| {
                 ui.label("Rig type:");
                 ComboBox::from_id_salt("rig_type")
-                    .selected_text(rig.rig_type.to_string())
+                    .selected_text(config.rig_type.to_string())
                     .show_ui(ui, |ui| {
                         for rig_type in &self.rig_types {
                             ui.selectable_value(
-                                &mut rig.rig_type,
+                                &mut config.rig_type,
                                 rig_type.clone(),
                                 rig_type.to_string(),
                             );
@@ -87,22 +108,22 @@ impl<'a> TabViewer for AppTabViewer<'a> {
 
                 ui.label("Port:");
                 ComboBox::from_id_salt("port")
-                    .selected_text(if rig.port.is_empty() {
+                    .selected_text(if config.port.is_empty() {
                         "Select port...".to_string()
                     } else {
                         let mut display_name = self
                             .available_ports
                             .iter()
-                            .find(|p| p.port_name == rig.port)
+                            .find(|p| p.port_name == config.port)
                             .map(|p| p.display_name.clone())
-                            .unwrap_or_else(|| rig.port.clone());
+                            .unwrap_or_else(|| config.port.clone());
                         display_name.truncate(30);
                         display_name
                     })
                     .show_ui(ui, |ui| {
                         for entry in &self.available_ports {
                             ui.selectable_value(
-                                &mut rig.port,
+                                &mut config.port,
                                 entry.port_name.clone(),
                                 &entry.display_name,
                             );
@@ -112,52 +133,52 @@ impl<'a> TabViewer for AppTabViewer<'a> {
 
                 ui.label("Baud Rate:");
                 ComboBox::from_id_salt("baud_rate")
-                    .selected_text(format!("{}", rig.baud_rate))
+                    .selected_text(format!("{}", config.baud_rate))
                     .show_ui(ui, |ui| {
                         for rate in BaudRate::iter_rates() {
-                            ui.selectable_value(&mut rig.baud_rate, rate, format!("{rate}"));
+                            ui.selectable_value(&mut config.baud_rate, rate, format!("{rate}"));
                         }
                     });
                 ui.end_row();
 
                 ui.label("Data Bits:");
                 ComboBox::from_id_salt("data_bits")
-                    .selected_text(format!("{}", rig.data_bits))
+                    .selected_text(format!("{}", config.data_bits))
                     .show_ui(ui, |ui| {
                         for bits in DataBits::iter_data_bits() {
-                            ui.selectable_value(&mut rig.data_bits, bits, format!("{bits}"));
+                            ui.selectable_value(&mut config.data_bits, bits, format!("{bits}"));
                         }
                     });
                 ui.end_row();
 
                 ui.label("Stop Bits:");
                 ComboBox::from_id_salt("stop_bits")
-                    .selected_text(format!("{}", rig.stop_bits))
+                    .selected_text(format!("{}", config.stop_bits))
                     .show_ui(ui, |ui| {
                         for bits in [StopBits::Bits1, StopBits::Bits2] {
-                            ui.selectable_value(&mut rig.stop_bits, bits, format!("{bits}"));
+                            ui.selectable_value(&mut config.stop_bits, bits, format!("{bits}"));
                         }
                     });
                 ui.end_row();
 
                 ui.label("Parity:");
-                ui.checkbox(&mut rig.parity, "");
+                ui.checkbox(&mut config.parity, "");
                 ui.end_row();
 
                 ui.label("RTS:");
-                ui.checkbox(&mut rig.rts, "");
+                ui.checkbox(&mut config.rts, "");
                 ui.end_row();
 
                 ui.label("DTR:");
-                ui.checkbox(&mut rig.dtr, "");
+                ui.checkbox(&mut config.dtr, "");
                 ui.end_row();
 
                 ui.label("Poll Interval (ms):");
-                ui.add(egui::DragValue::new(&mut rig.poll_interval).range(10..=1000));
+                ui.add(egui::DragValue::new(&mut config.poll_interval).range(10..=1000));
                 ui.end_row();
 
                 ui.label("Timeout (ms):");
-                ui.add(egui::DragValue::new(&mut rig.timeout).range(10..=5000));
+                ui.add(egui::DragValue::new(&mut config.timeout).range(10..=5000));
                 ui.end_row();
             });
 
@@ -167,44 +188,56 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                 .num_columns(2)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        let (color, text) = match self.device_status.get(&rig.id) {
-                            Some(PortStatus::Connected) => {
-                                (egui::Color32::GREEN, "Connected".to_string())
-                            }
-                            Some(PortStatus::Disconnected) => {
-                                (egui::Color32::RED, "Disconnected".to_string())
-                            }
-                            Some(PortStatus::Error(err)) => {
-                                let mut msg = format!("Error: {err}");
-                                msg.truncate(50);
-                                (egui::Color32::RED, msg)
-                            }
-                            None => (egui::Color32::GRAY, String::new()),
-                        };
+                        if let Some(rig_id) = tab.rig_id {
+                            let (color, text) = match self.device_status.get(&rig_id) {
+                                Some(PortStatus::Connected) => {
+                                    (egui::Color32::GREEN, "Connected".to_string())
+                                }
+                                Some(PortStatus::Disconnected) => {
+                                    (egui::Color32::RED, "Disconnected".to_string())
+                                }
+                                Some(PortStatus::Error(err)) => {
+                                    let mut msg = format!("Error: {err}");
+                                    msg.truncate(50);
+                                    (egui::Color32::RED, msg)
+                                }
+                                None => (egui::Color32::RED, "Disconnected".to_string()),
+                            };
 
-                        let (rect, _) =
-                            ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                        ui.painter().circle_filled(rect.center(), 4.0, color);
-
-                        if !text.is_empty() {
+                            let (rect, _) =
+                                ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                            ui.painter().circle_filled(rect.center(), 4.0, color);
                             ui.colored_label(color, &text);
                         }
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("OK").clicked() {
-                            let sender = self.sender.clone();
-                            match rig.validate() {
+                            match config.validate() {
                                 Ok(_) => {
-                                    let tab = rig.clone();
-                                    tokio::task::spawn(async move {
-                                        sender
-                                            .send(ManagerCommand::CreateOrUpdateDevice {
-                                                settings: tab.clone(),
-                                            })
-                                            .await
-                                            .unwrap();
-                                    });
+                                    let sender = self.sender.clone();
+                                    let config = config.clone();
+                                    if let Some(rig_id) = tab.rig_id {
+                                        tokio::task::spawn(async move {
+                                            let _ = sender
+                                                .send(ManagerCommand::UpdateDevice {
+                                                    device_id: rig_id,
+                                                    config,
+                                                })
+                                                .await;
+                                        });
+                                    } else {
+                                        let (tx, rx) = oneshot::channel();
+                                        self.pending_creates.push((tab.tab_id, rx));
+                                        tokio::task::spawn(async move {
+                                            let _ = sender
+                                                .send(ManagerCommand::CreateDevice {
+                                                    config,
+                                                    response: tx,
+                                                })
+                                                .await;
+                                        });
+                                    }
                                 }
                                 Err(err) => {
                                     self.error_message = Some(err);
@@ -220,22 +253,19 @@ impl<'a> TabViewer for AppTabViewer<'a> {
     }
 
     fn is_closeable(&self, tab: &Self::Tab) -> bool {
-        Some(tab.id) == self.active_tab_id
+        Some(tab.tab_id) == self.active_tab_id
     }
 
     fn on_close(&mut self, tab: &mut Self::Tab) -> OnCloseResponse {
-        let sender = self.sender.clone();
-        let device_id = tab.id;
-
-        tokio::task::spawn(async move {
-            sender
-                .send(ManagerCommand::RemoveDevice { device_id })
-                .await
-                .unwrap();
-        });
-
-        self.remove_device_ids.push(tab.id);
-
+        if let Some(rig_id) = tab.rig_id {
+            let sender = self.sender.clone();
+            tokio::task::spawn(async move {
+                let _ = sender
+                    .send(ManagerCommand::RemoveDevice { device_id: rig_id })
+                    .await;
+            });
+            self.remove_device_ids.push(rig_id);
+        }
         OnCloseResponse::Close
     }
 
@@ -245,43 +275,87 @@ impl<'a> TabViewer for AppTabViewer<'a> {
 }
 
 struct AppTabs {
-    dock_state: DockState<RigSettings>,
+    dock_state: DockState<RigTab>,
     rig_types: Vec<String>,
     available_ports: Vec<SerialPortEntry>,
     sender: Sender<ManagerCommand>,
     device_status: HashMap<RigId, PortStatus>,
+    next_tab_id: u64,
+    pending_creates: Vec<(TabId, oneshot::Receiver<RigId>)>,
 }
 
 impl AppTabs {
     fn new(sender: Sender<ManagerCommand>, rig_types: Vec<String>) -> Self {
-        let dock_state = DockState::new(vec![RigSettings::default()]);
+        let mut next = 0u64;
+        let draft = RigTab {
+            tab_id: next_tab_id(&mut next),
+            rig_id: None,
+            config: RigConfig::default(),
+        };
+        let dock_state = DockState::new(vec![draft]);
         Self {
             dock_state,
             rig_types,
             available_ports: Vec::new(),
             sender,
             device_status: HashMap::new(),
+            next_tab_id: next,
+            pending_creates: Vec::new(),
         }
     }
 
     fn set_tabs(&mut self, settings: Vec<RigSettings>) {
-        if settings.is_empty() {
-            self.dock_state = DockState::new(vec![RigSettings::default()]);
+        let tabs: Vec<RigTab> = if settings.is_empty() {
+            vec![RigTab {
+                tab_id: next_tab_id(&mut self.next_tab_id),
+                rig_id: None,
+                config: RigConfig::default(),
+            }]
         } else {
-            self.dock_state = DockState::new(settings);
-        }
+            settings
+                .into_iter()
+                .map(|s| RigTab {
+                    tab_id: next_tab_id(&mut self.next_tab_id),
+                    rig_id: Some(s.id),
+                    config: s.config,
+                })
+                .collect()
+        };
+        self.device_status = tabs
+            .iter()
+            .filter_map(|tab| tab.rig_id.map(|id| (id, PortStatus::Disconnected)))
+            .collect();
+        self.dock_state = DockState::new(tabs);
+    }
+
+    fn poll_pending_creates(&mut self) {
+        self.pending_creates.retain_mut(|(tab_id, rx)| {
+            match rx.try_recv() {
+                Ok(rig_id) => {
+                    for (_, node) in self.dock_state.iter_all_tabs_mut() {
+                        if node.tab_id == *tab_id {
+                            node.rig_id = Some(rig_id);
+                            break;
+                        }
+                    }
+                    false // remove from pending
+                }
+                Err(oneshot::error::TryRecvError::Empty) => true, // keep waiting
+                Err(oneshot::error::TryRecvError::Closed) => false, // sender dropped, remove
+            }
+        });
     }
 
     fn ui(&mut self, ui: &mut Ui) {
         let active_tab_id = self
             .dock_state
             .find_active_focused()
-            .map(|(_, rig)| rig.id)
+            .map(|(_, tab)| tab.tab_id)
             .or_else(|| {
                 self.dock_state
                     .iter_leaves()
                     .next()
-                    .map(|(_, rig)| rig.tabs[0].id)
+                    .map(|(_, node)| node.tabs[0].tab_id)
             });
 
         let mut tab_viewer = AppTabViewer::new(
@@ -290,6 +364,7 @@ impl AppTabs {
             self.available_ports.clone(),
             active_tab_id,
             &self.device_status,
+            &mut self.pending_creates,
         );
 
         DockArea::new(&mut self.dock_state)
@@ -312,7 +387,11 @@ impl AppTabs {
         if add_tab {
             self.dock_state
                 .main_surface_mut()
-                .push_to_first_leaf(RigSettings::default());
+                .push_to_first_leaf(RigTab {
+                    tab_id: next_tab_id(&mut self.next_tab_id),
+                    rig_id: None,
+                    config: RigConfig::default(),
+                });
         }
     }
 }
@@ -340,6 +419,8 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.tabs.poll_pending_creates();
+
         let mut has_messages = false;
         loop {
             match self.message_receiver.try_recv() {
@@ -374,7 +455,6 @@ impl eframe::App for App {
         if has_messages {
             ctx.request_repaint();
         } else {
-            // Repainting every 100ms to process messages
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 

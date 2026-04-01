@@ -9,7 +9,7 @@ use tokio::time::Duration;
 use tracing::{error, info};
 
 use crate::resources::Resources;
-use crate::rig_settings::{RigId, RigSettings, Settings};
+use crate::rig_settings::{RigConfig, RigId, RigSettings, Settings};
 use crate::runtime::Value;
 use crate::serial::device::{DeviceTask, DeviceTaskCommand, SerialDevice};
 
@@ -45,8 +45,13 @@ impl From<CommandResponse> for serde_json::Value {
 
 #[derive(Debug)]
 pub enum ManagerCommand {
-    CreateOrUpdateDevice {
-        settings: RigSettings,
+    CreateDevice {
+        config: RigConfig,
+        response: oneshot::Sender<RigId>,
+    },
+    UpdateDevice {
+        device_id: RigId,
+        config: RigConfig,
     },
     ExecuteCommand {
         device_id: RigId,
@@ -167,20 +172,33 @@ impl DeviceManager {
 
     async fn handle_manager_command(&mut self, manager_command: ManagerCommand) -> Result<()> {
         match manager_command {
-            ManagerCommand::CreateOrUpdateDevice { settings } => {
-                if self.settings.get_rig(settings.id) == Some(&settings) {
+            ManagerCommand::CreateDevice { config, response } => {
+                let settings = self.settings.add_rig(config);
+                let device_id = settings.id;
+
+                let path = self.data_dir.join(RIGS_FILE);
+                let content = toml::to_string(&self.settings)?;
+                std::fs::write(path, content)?;
+
+                if let Err(err) = self.add_device(device_id, settings).await {
+                    error!(%err, "Failed to add device");
+                }
+
+                let _ = response.send(device_id);
+            }
+            ManagerCommand::UpdateDevice { device_id, config } => {
+                if let Some(rig) = self.settings.get_rig(device_id)
+                    && rig.config == config
+                {
                     return Ok(());
                 }
 
-                self.devices.remove(&settings.id);
+                self.devices.remove(&device_id);
 
-                let device_id =
-                    if let Some(changed_settings) = self.settings.get_rig_mut(settings.id) {
-                        *changed_settings = settings.clone();
-                        settings.id
-                    } else {
-                        self.settings.add_rig(settings.clone())
-                    };
+                if let Some(rig) = self.settings.get_rig_mut(device_id) {
+                    rig.config = config;
+                }
+
                 let path = self.data_dir.join(RIGS_FILE);
                 let content = toml::to_string(&self.settings)?;
                 std::fs::write(path, content)?;
@@ -218,7 +236,7 @@ impl DeviceManager {
                 let devices: HashMap<RigId, String> = self
                     .devices
                     .iter()
-                    .map(|(id, handle)| (*id, handle.settings.rig_type.clone()))
+                    .map(|(id, handle)| (*id, handle.settings.config.rig_type.clone()))
                     .collect();
                 let _ = response_channel.send(devices);
             }
@@ -299,10 +317,10 @@ impl DeviceManager {
         let interpreter = self
             .resources
             .rigs
-            .get(&settings.rig_type)
+            .get(&settings.config.rig_type)
             .context("Unknown rig type")?
             .clone();
-        info!(%device_id, rig_type = %settings.rig_type, port = %settings.port, "Opening device");
+        info!(%device_id, rig_type = %settings.config.rig_type, port = %settings.config.port, "Opening device");
 
         let (serial_message_tx, serial_message_rx) = mpsc::channel(8);
         let (serial_device, serial_command_tx, serial_command_rx) =

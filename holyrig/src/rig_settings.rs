@@ -122,8 +122,7 @@ impl Display for StopBits {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct RigSettings {
-    pub id: RigId,
+pub struct RigConfig {
     #[serde(default = "default_rig_type")]
     pub rig_type: String,
     pub port: String,
@@ -140,6 +139,13 @@ pub struct RigSettings {
     pub timeout: u16,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RigSettings {
+    pub id: RigId,
+    #[serde(flatten)]
+    pub config: RigConfig,
+}
+
 fn default_rig_type() -> String {
     "unspecified".to_string()
 }
@@ -152,7 +158,7 @@ fn default_timeout() -> u16 {
     1000
 }
 
-impl RigSettings {
+impl RigConfig {
     pub fn validate(&self) -> Result<(), String> {
         if self.rig_type == "unspecified" {
             return Err("Rig type must be specified".to_string());
@@ -174,7 +180,7 @@ impl RigSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct Settings {
     rigs: Vec<RigSettings>,
     #[serde(skip)]
@@ -194,12 +200,12 @@ impl Settings {
         self.rigs.iter_mut().find(|r| r.id == id)
     }
 
-    pub fn add_rig(&mut self, mut settings: RigSettings) -> RigId {
+    pub fn add_rig(&mut self, config: RigConfig) -> RigSettings {
         let id = RigId(self.next_id);
         self.next_id += 1;
-        settings.id = id;
-        self.rigs.push(settings);
-        id
+        let settings = RigSettings { id, config };
+        self.rigs.push(settings.clone());
+        settings
     }
 
     pub fn remove_rig(&mut self, id: RigId) -> Option<RigSettings> {
@@ -209,14 +215,6 @@ impl Settings {
 
     pub fn rigs(&self) -> impl Iterator<Item = &RigSettings> {
         self.rigs.iter()
-    }
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        let rigs = vec![RigSettings::default()];
-        let next_id = Self::compute_next_id(&rigs);
-        Self { rigs, next_id }
     }
 }
 

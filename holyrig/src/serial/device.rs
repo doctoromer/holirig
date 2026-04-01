@@ -8,7 +8,7 @@ use tokio::time::{Duration, interval, sleep};
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 use tracing::{debug, error, info, warn};
 
-use crate::rig_settings::{DataBits, RigId, RigSettings, StopBits};
+use crate::rig_settings::{DataBits, RigConfig, RigId, RigSettings, StopBits};
 use crate::runtime::{ExternalApi, Interpreter, Value};
 use crate::serial::manager::{CommandResponse, ManagerMessage, StatusCache};
 
@@ -48,7 +48,7 @@ impl SerialDevice {
         mpsc::Sender<DeviceCommand>,
         mpsc::Receiver<DeviceCommand>,
     )> {
-        let port = Self::open_port(&settings)?;
+        let port = Self::open_port(&settings.config)?;
         let (command_tx, command_rx) = mpsc::channel(32);
 
         Ok((
@@ -63,7 +63,7 @@ impl SerialDevice {
         ))
     }
 
-    fn open_port(settings: &RigSettings) -> Result<SerialStream> {
+    fn open_port(settings: &RigConfig) -> Result<SerialStream> {
         let data_bits = match settings.data_bits {
             DataBits::Bits8 => tokio_serial::DataBits::Eight,
             DataBits::Bits7 => tokio_serial::DataBits::Seven,
@@ -98,19 +98,22 @@ impl SerialDevice {
     }
 
     async fn attempt_reconnect(&mut self) -> Result<()> {
-        warn!(device_id = %self.id, port = %self.settings.port, "Disconnected, attempting to reconnect");
+        warn!(device_id = %self.id, port = %self.settings.config.port, "Disconnected, attempting to reconnect");
 
         // Drop the old port immediately so the kernel releases the device node.
         let _ = self.port.take();
 
         loop {
-            sleep(Duration::from_millis(self.settings.poll_interval as u64)).await;
-            if let Ok(new_port) = Self::open_port(&self.settings) {
+            sleep(Duration::from_millis(
+                self.settings.config.poll_interval as u64,
+            ))
+            .await;
+            if let Ok(new_port) = Self::open_port(&self.settings.config) {
                 if let Err(err) = new_port.clear(serialport::ClearBuffer::All) {
                     warn!(device_id = %self.id, %err, "Failed to clear serial buffers after reconnect");
                 }
                 self.port = Some(new_port);
-                info!(device_id = %self.id, port = %self.settings.port, "Reconnected");
+                info!(device_id = %self.id, port = %self.settings.config.port, "Reconnected");
                 self.message_tx.send(DeviceMessage::Reconnected).await.ok();
                 return Ok(());
             }
@@ -132,7 +135,7 @@ impl SerialDevice {
     async fn read_exact(&mut self, length: usize) -> Result<Vec<u8>> {
         let mut buf = vec![0u8; length];
         tokio::time::timeout(
-            Duration::from_millis(self.settings.timeout as u64),
+            Duration::from_millis(self.settings.config.timeout as u64),
             self.port()?.read_exact(&mut buf),
         )
         .await??;
@@ -285,7 +288,9 @@ impl DeviceTask {
     ) {
         self.initialize_and_notify().await;
 
-        let mut poll_interval = interval(Duration::from_millis(self.settings.poll_interval as u64));
+        let mut poll_interval = interval(Duration::from_millis(
+            self.settings.config.poll_interval as u64,
+        ));
 
         loop {
             tokio::select! {
@@ -349,7 +354,7 @@ impl DeviceTask {
                 info!(device_id = %self.id, "Device initialized");
                 let _ = self.manager_tx.send(ManagerMessage::DeviceConnected {
                     device_id: self.id,
-                    rig_model: self.settings.rig_type.clone(),
+                    rig_model: self.settings.config.rig_type.clone(),
                 });
             }
             Err(err) => {
