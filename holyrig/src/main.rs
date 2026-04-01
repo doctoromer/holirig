@@ -148,12 +148,14 @@ async fn main() -> Result<()> {
 
     let jsonrpc_command_sender = device_manager.sender();
     let jsonrpc_command_receiver = device_manager.receiver();
+    let jsonrpc_status_cache = device_manager.status_cache();
     let jsonrpc_server = JsonRpcServer::new(
         "127.0.0.1",
         5973,
         resources.clone(),
         jsonrpc_command_sender,
         jsonrpc_command_receiver,
+        jsonrpc_status_cache,
         &initial_rigs,
     )?;
 

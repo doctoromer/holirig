@@ -70,6 +70,15 @@ pub fn subscribe_status_request(rig_id: usize, fields: Vec<String>) -> Request {
     }
 }
 
+pub fn get_status_request(rig_id: usize) -> Request {
+    Request {
+        jsonrpc: "2.0".into(),
+        method: "get_status".into(),
+        params: Some(json!({"rig_id": rig_id})),
+        id: next_id(),
+    }
+}
+
 pub fn execute_command_request(
     rig_id: usize,
     command: String,

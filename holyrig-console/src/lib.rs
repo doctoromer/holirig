@@ -59,6 +59,14 @@ pub async fn run(addr: SocketAddr) -> Result<()> {
             }
 
             app.set_capabilities(rig_id, caps);
+
+            let status_request = protocol::get_status_request(rig_id);
+            if let Ok(response) = client.send_and_wait(&status_request).await
+                && let Some(Value::Object(values)) = response.result
+            {
+                let updates: HashMap<String, Value> = values.into_iter().collect();
+                app.update_status(rig_id, updates);
+            }
         }
     }
 

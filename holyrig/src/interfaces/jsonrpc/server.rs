@@ -6,13 +6,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, mpsc};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use super::{Notification, RigRpcHandler};
 use crate::interfaces::jsonrpc::{Request, Response, RpcError};
 use crate::resources::Resources;
 use crate::rig_settings::{RigId, RigSettings};
-use crate::serial::manager::{ManagerCommand, ManagerMessage};
+use crate::serial::manager::{ManagerCommand, ManagerMessage, StatusCache};
 
 type Subscriptions = HashMap<(RigId, SocketAddr), Vec<String>>;
 
@@ -22,6 +22,7 @@ pub struct JsonRpcServer {
     handlers: Arc<HashMap<String, RigRpcHandler>>,
     rigs_state: Arc<RwLock<HashMap<RigId, (String, bool)>>>,
     registered_status: Arc<RwLock<Subscriptions>>,
+    status_cache: StatusCache,
     manager_rx: broadcast::Receiver<ManagerMessage>,
 }
 
@@ -32,6 +33,7 @@ impl JsonRpcServer {
         resources: Arc<Resources>,
         command_tx: mpsc::Sender<ManagerCommand>,
         manager_rx: broadcast::Receiver<ManagerMessage>,
+        status_cache: StatusCache,
         initial_rigs: &[RigSettings],
     ) -> Result<Self> {
         let handlers = resources
@@ -56,6 +58,7 @@ impl JsonRpcServer {
             handlers: Arc::new(handlers),
             rigs_state: Arc::new(RwLock::new(rigs_state)),
             registered_status: Arc::new(RwLock::new(HashMap::new())),
+            status_cache,
             manager_rx,
         })
     }
@@ -105,6 +108,10 @@ impl JsonRpcServer {
     }
 
     async fn handle_packet(&self, data: &[u8], src_addr: SocketAddr) -> Result<Response> {
+        debug!(
+            data = String::from_utf8_lossy(data).as_ref(),
+            "Received packet"
+        );
         let request = serde_json::from_slice::<Request>(data)
             .map_err(|err| anyhow!(RpcError::parse_error(&err)))?;
         let response = match request.method.as_str() {
@@ -122,6 +129,16 @@ impl JsonRpcServer {
                         .collect(),
                 );
                 Response::build_result(request.id, rigs)
+            }
+            "get_status" => {
+                let id = request
+                    .get_rig_id()
+                    .ok_or_else(|| anyhow!(RpcError::missing_rig_id()))?;
+                let cached = self.status_cache.read();
+                let values = cached.get(&id).cloned().unwrap_or_default();
+                let json_values: serde_json::Map<String, serde_json::Value> =
+                    values.into_iter().collect();
+                Response::build_result(request.id, serde_json::Value::Object(json_values))
             }
             "subscribe_status" => {
                 let id = request

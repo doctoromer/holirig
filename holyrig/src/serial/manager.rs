@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use parking_lot::RwLock;
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -11,6 +12,8 @@ use crate::resources::Resources;
 use crate::rig_settings::{RigId, RigSettings, Settings};
 use crate::runtime::Value;
 use crate::serial::device::{DeviceTask, DeviceTaskCommand, SerialDevice};
+
+pub type StatusCache = Arc<RwLock<HashMap<RigId, HashMap<String, serde_json::Value>>>>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SerialPortEntry {
@@ -90,6 +93,8 @@ pub struct DeviceManager {
     settings: Settings,
     data_dir: PathBuf,
 
+    status_cache: StatusCache,
+
     manager_message_tx: broadcast::Sender<ManagerMessage>,
 
     manager_command_tx: mpsc::Sender<ManagerCommand>,
@@ -127,11 +132,16 @@ impl DeviceManager {
             devices: HashMap::new(),
             settings,
             data_dir,
+            status_cache: Arc::new(RwLock::new(HashMap::new())),
             manager_message_tx,
             manager_command_tx,
             manager_command_rx,
             prev_ports: Vec::new(),
         }
+    }
+
+    pub fn status_cache(&self) -> StatusCache {
+        self.status_cache.clone()
     }
 
     pub fn initial_rigs(&self) -> impl Iterator<Item = &RigSettings> {
@@ -306,6 +316,7 @@ impl DeviceManager {
             interpreter,
             serial_command_tx,
             self.manager_message_tx.clone(),
+            self.status_cache.clone(),
         );
 
         tokio::spawn(async move {

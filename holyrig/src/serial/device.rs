@@ -10,7 +10,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::rig_settings::{DataBits, RigId, RigSettings, StopBits};
 use crate::runtime::{ExternalApi, Interpreter, Value};
-use crate::serial::manager::{CommandResponse, ManagerMessage};
+use crate::serial::manager::{CommandResponse, ManagerMessage, StatusCache};
 
 #[derive(Debug)]
 pub enum DeviceCommand {
@@ -253,6 +253,7 @@ pub struct DeviceTask {
     serial_command_tx: mpsc::Sender<DeviceCommand>,
     previous_values: HashMap<String, Value>,
     manager_tx: broadcast::Sender<ManagerMessage>,
+    status_cache: StatusCache,
     connected: bool,
 }
 
@@ -263,6 +264,7 @@ impl DeviceTask {
         interpreter: Interpreter,
         serial_command_tx: mpsc::Sender<DeviceCommand>,
         manager_tx: broadcast::Sender<ManagerMessage>,
+        status_cache: StatusCache,
     ) -> Self {
         Self {
             id,
@@ -271,6 +273,7 @@ impl DeviceTask {
             serial_command_tx,
             previous_values: HashMap::new(),
             manager_tx,
+            status_cache,
             connected: false,
         }
     }
@@ -377,6 +380,15 @@ impl DeviceTask {
 
         if !changed.is_empty() {
             debug!(device_id = %self.id, ?changed, "Status update");
+            let json_changed: HashMap<String, serde_json::Value> = changed
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::from(v)))
+                .collect();
+            self.status_cache
+                .write()
+                .entry(self.id)
+                .or_default()
+                .extend(json_changed);
             let _ = self.manager_tx.send(ManagerMessage::StatusUpdate {
                 device_id: self.id,
                 values: changed,
