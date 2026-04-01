@@ -9,7 +9,6 @@ use egui_dock::{
     AllowedSplits, DockArea, DockState, NodeIndex, SurfaceIndex, TabViewer,
     tab_viewer::OnCloseResponse,
 };
-use std::collections::HashMap;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
@@ -29,9 +28,15 @@ fn next_tab_id(counter: &mut u64) -> TabId {
     id
 }
 
+enum RigTabState {
+    Draft,
+    Pending,
+    Registered { rig_id: RigId, status: PortStatus },
+}
+
 struct RigTab {
     tab_id: TabId,
-    rig_id: Option<RigId>,
+    state: RigTabState,
     config: RigConfig,
 }
 
@@ -43,8 +48,6 @@ struct AppTabViewer<'a> {
     sender: Sender<ManagerCommand>,
     error_message: Option<String>,
     active_tab_id: Option<TabId>,
-    device_status: &'a HashMap<RigId, PortStatus>,
-    remove_device_ids: Vec<RigId>,
     pending_creates: &'a mut Vec<(TabId, oneshot::Receiver<RigId>)>,
 }
 
@@ -54,7 +57,6 @@ impl<'a> AppTabViewer<'a> {
         rig_types: Vec<String>,
         available_ports: Vec<SerialPortEntry>,
         active_tab_id: Option<TabId>,
-        device_status: &'a HashMap<RigId, PortStatus>,
         pending_creates: &'a mut Vec<(TabId, oneshot::Receiver<RigId>)>,
     ) -> Self {
         AppTabViewer {
@@ -65,8 +67,6 @@ impl<'a> AppTabViewer<'a> {
             sender,
             error_message: None,
             active_tab_id,
-            device_status,
-            remove_device_ids: Vec::new(),
             pending_creates,
         }
     }
@@ -187,21 +187,24 @@ impl<'a> TabViewer for AppTabViewer<'a> {
             Grid::new("status_and_buttons")
                 .num_columns(2)
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        if let Some(rig_id) = tab.rig_id {
-                            let (color, text) = match self.device_status.get(&rig_id) {
-                                Some(PortStatus::Connected) => {
+                    ui.horizontal(|ui| match &tab.state {
+                        RigTabState::Draft => {}
+                        RigTabState::Pending => {
+                            ui.colored_label(egui::Color32::YELLOW, "Connecting...");
+                        }
+                        RigTabState::Registered { status, .. } => {
+                            let (color, text) = match status {
+                                PortStatus::Connected => {
                                     (egui::Color32::GREEN, "Connected".to_string())
                                 }
-                                Some(PortStatus::Disconnected) => {
+                                PortStatus::Disconnected => {
                                     (egui::Color32::RED, "Disconnected".to_string())
                                 }
-                                Some(PortStatus::Error(err)) => {
+                                PortStatus::Error(err) => {
                                     let mut msg = format!("Error: {err}");
                                     msg.truncate(50);
                                     (egui::Color32::RED, msg)
                                 }
-                                None => (egui::Color32::RED, "Disconnected".to_string()),
                             };
 
                             let (rect, _) =
@@ -212,31 +215,41 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("OK").clicked() {
+                        let ok_enabled = !matches!(tab.state, RigTabState::Pending);
+                        if ui
+                            .add_enabled(ok_enabled, egui::Button::new("OK"))
+                            .clicked()
+                        {
                             match config.validate() {
                                 Ok(_) => {
                                     let sender = self.sender.clone();
                                     let config = config.clone();
-                                    if let Some(rig_id) = tab.rig_id {
-                                        tokio::task::spawn(async move {
-                                            let _ = sender
-                                                .send(ManagerCommand::UpdateDevice {
-                                                    device_id: rig_id,
-                                                    config,
-                                                })
-                                                .await;
-                                        });
-                                    } else {
-                                        let (tx, rx) = oneshot::channel();
-                                        self.pending_creates.push((tab.tab_id, rx));
-                                        tokio::task::spawn(async move {
-                                            let _ = sender
-                                                .send(ManagerCommand::CreateDevice {
-                                                    config,
-                                                    response: tx,
-                                                })
-                                                .await;
-                                        });
+                                    match &tab.state {
+                                        RigTabState::Registered { rig_id, .. } => {
+                                            let rig_id = *rig_id;
+                                            tokio::task::spawn(async move {
+                                                let _ = sender
+                                                    .send(ManagerCommand::UpdateDevice {
+                                                        device_id: rig_id,
+                                                        config,
+                                                    })
+                                                    .await;
+                                            });
+                                        }
+                                        RigTabState::Draft => {
+                                            let (tx, rx) = oneshot::channel();
+                                            self.pending_creates.push((tab.tab_id, rx));
+                                            tab.state = RigTabState::Pending;
+                                            tokio::task::spawn(async move {
+                                                let _ = sender
+                                                    .send(ManagerCommand::CreateDevice {
+                                                        config,
+                                                        response: tx,
+                                                    })
+                                                    .await;
+                                            });
+                                        }
+                                        RigTabState::Pending => {}
                                     }
                                 }
                                 Err(err) => {
@@ -257,14 +270,13 @@ impl<'a> TabViewer for AppTabViewer<'a> {
     }
 
     fn on_close(&mut self, tab: &mut Self::Tab) -> OnCloseResponse {
-        if let Some(rig_id) = tab.rig_id {
+        if let RigTabState::Registered { rig_id, .. } = tab.state {
             let sender = self.sender.clone();
             tokio::task::spawn(async move {
                 let _ = sender
                     .send(ManagerCommand::RemoveDevice { device_id: rig_id })
                     .await;
             });
-            self.remove_device_ids.push(rig_id);
         }
         OnCloseResponse::Close
     }
@@ -279,7 +291,6 @@ struct AppTabs {
     rig_types: Vec<String>,
     available_ports: Vec<SerialPortEntry>,
     sender: Sender<ManagerCommand>,
-    device_status: HashMap<RigId, PortStatus>,
     next_tab_id: u64,
     pending_creates: Vec<(TabId, oneshot::Receiver<RigId>)>,
 }
@@ -289,7 +300,7 @@ impl AppTabs {
         let mut next = 0u64;
         let draft = RigTab {
             tab_id: next_tab_id(&mut next),
-            rig_id: None,
+            state: RigTabState::Draft,
             config: RigConfig::default(),
         };
         let dock_state = DockState::new(vec![draft]);
@@ -298,7 +309,6 @@ impl AppTabs {
             rig_types,
             available_ports: Vec::new(),
             sender,
-            device_status: HashMap::new(),
             next_tab_id: next,
             pending_creates: Vec::new(),
         }
@@ -308,7 +318,7 @@ impl AppTabs {
         let tabs: Vec<RigTab> = if settings.is_empty() {
             vec![RigTab {
                 tab_id: next_tab_id(&mut self.next_tab_id),
-                rig_id: None,
+                state: RigTabState::Draft,
                 config: RigConfig::default(),
             }]
         } else {
@@ -316,34 +326,54 @@ impl AppTabs {
                 .into_iter()
                 .map(|s| RigTab {
                     tab_id: next_tab_id(&mut self.next_tab_id),
-                    rig_id: Some(s.id),
+                    state: RigTabState::Registered {
+                        rig_id: s.id,
+                        status: PortStatus::Disconnected,
+                    },
                     config: s.config,
                 })
                 .collect()
         };
-        self.device_status = tabs
-            .iter()
-            .filter_map(|tab| tab.rig_id.map(|id| (id, PortStatus::Disconnected)))
-            .collect();
         self.dock_state = DockState::new(tabs);
     }
 
     fn poll_pending_creates(&mut self) {
-        self.pending_creates.retain_mut(|(tab_id, rx)| {
-            match rx.try_recv() {
+        self.pending_creates
+            .retain_mut(|(tab_id, rx)| match rx.try_recv() {
                 Ok(rig_id) => {
-                    for (_, node) in self.dock_state.iter_all_tabs_mut() {
-                        if node.tab_id == *tab_id {
-                            node.rig_id = Some(rig_id);
+                    for (_, tab) in self.dock_state.iter_all_tabs_mut() {
+                        if tab.tab_id == *tab_id {
+                            tab.state = RigTabState::Registered {
+                                rig_id,
+                                status: PortStatus::Disconnected,
+                            };
                             break;
                         }
                     }
-                    false // remove from pending
+                    false
                 }
-                Err(oneshot::error::TryRecvError::Empty) => true, // keep waiting
-                Err(oneshot::error::TryRecvError::Closed) => false, // sender dropped, remove
+                Err(oneshot::error::TryRecvError::Empty) => true,
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    for (_, tab) in self.dock_state.iter_all_tabs_mut() {
+                        if tab.tab_id == *tab_id {
+                            tab.state = RigTabState::Draft;
+                            break;
+                        }
+                    }
+                    false
+                }
+            });
+    }
+
+    fn update_device_status(&mut self, device_id: RigId, status: PortStatus) {
+        for (_, tab) in self.dock_state.iter_all_tabs_mut() {
+            if let RigTabState::Registered { rig_id, status: s } = &mut tab.state
+                && *rig_id == device_id
+            {
+                *s = status;
+                break;
             }
-        });
+        }
     }
 
     fn ui(&mut self, ui: &mut Ui) {
@@ -363,7 +393,6 @@ impl AppTabs {
             self.rig_types.clone(),
             self.available_ports.clone(),
             active_tab_id,
-            &self.device_status,
             &mut self.pending_creates,
         );
 
@@ -377,19 +406,12 @@ impl AppTabs {
             .allowed_splits(AllowedSplits::None)
             .show_inside(ui, &mut tab_viewer);
 
-        let remove_ids = std::mem::take(&mut tab_viewer.remove_device_ids);
-        let add_tab = tab_viewer.add_tab_request;
-
-        for id in remove_ids {
-            self.device_status.remove(&id);
-        }
-
-        if add_tab {
+        if tab_viewer.add_tab_request {
             self.dock_state
                 .main_surface_mut()
                 .push_to_first_leaf(RigTab {
                     tab_id: next_tab_id(&mut self.next_tab_id),
-                    rig_id: None,
+                    state: RigTabState::Draft,
                     config: RigConfig::default(),
                 });
         }
@@ -432,18 +454,15 @@ impl eframe::App for App {
                         }
                         ManagerMessage::DeviceConnected { device_id, .. } => {
                             self.tabs
-                                .device_status
-                                .insert(device_id, PortStatus::Connected);
+                                .update_device_status(device_id, PortStatus::Connected);
                         }
                         ManagerMessage::DeviceDisconnected { device_id } => {
                             self.tabs
-                                .device_status
-                                .insert(device_id, PortStatus::Disconnected);
+                                .update_device_status(device_id, PortStatus::Disconnected);
                         }
                         ManagerMessage::DeviceError { device_id, error } => {
                             self.tabs
-                                .device_status
-                                .insert(device_id, PortStatus::Error(error));
+                                .update_device_status(device_id, PortStatus::Error(error));
                         }
                         ManagerMessage::StatusUpdate { .. } => {}
                     }
