@@ -1,7 +1,7 @@
 use crate::{
     rig_settings::{BaudRate, DataBits, RigConfig, RigId, RigSettings, StopBits},
     serial::ManagerCommand,
-    serial::manager::{ManagerMessage, SerialPortEntry},
+    serial::manager::{ConnectionStatus, ManagerMessage, SerialPortEntry},
 };
 use eframe::egui;
 use egui::{ComboBox, Grid, Ui};
@@ -12,12 +12,6 @@ use egui_dock::{
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
-
-pub enum PortStatus {
-    Disconnected,
-    Connected,
-    Error(String),
-}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 struct TabId(u64);
@@ -30,8 +24,10 @@ fn next_tab_id(counter: &mut u64) -> TabId {
 
 enum RigTabState {
     Draft,
-    Pending,
-    Registered { rig_id: RigId, status: PortStatus },
+    Registered {
+        rig_id: RigId,
+        status: ConnectionStatus,
+    },
 }
 
 struct RigTab {
@@ -189,18 +185,15 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                 .show(ui, |ui| {
                     ui.horizontal(|ui| match &tab.state {
                         RigTabState::Draft => {}
-                        RigTabState::Pending => {
-                            ui.colored_label(egui::Color32::YELLOW, "Connecting...");
-                        }
                         RigTabState::Registered { status, .. } => {
                             let (color, text) = match status {
-                                PortStatus::Connected => {
+                                ConnectionStatus::Connecting => {
+                                    (egui::Color32::YELLOW, "Connecting...".to_string())
+                                }
+                                ConnectionStatus::Connected => {
                                     (egui::Color32::GREEN, "Connected".to_string())
                                 }
-                                PortStatus::Disconnected => {
-                                    (egui::Color32::RED, "Disconnected".to_string())
-                                }
-                                PortStatus::Error(err) => {
+                                ConnectionStatus::Error(err) => {
                                     let mut msg = format!("Error: {err}");
                                     msg.truncate(50);
                                     (egui::Color32::RED, msg)
@@ -215,11 +208,7 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let ok_enabled = !matches!(tab.state, RigTabState::Pending);
-                        if ui
-                            .add_enabled(ok_enabled, egui::Button::new("OK"))
-                            .clicked()
-                        {
+                        if ui.button("OK").clicked() {
                             match config.validate() {
                                 Ok(_) => {
                                     let sender = self.sender.clone();
@@ -239,7 +228,6 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                                         RigTabState::Draft => {
                                             let (tx, rx) = oneshot::channel();
                                             self.pending_creates.push((tab.tab_id, rx));
-                                            tab.state = RigTabState::Pending;
                                             tokio::task::spawn(async move {
                                                 let _ = sender
                                                     .send(ManagerCommand::CreateDevice {
@@ -249,7 +237,6 @@ impl<'a> TabViewer for AppTabViewer<'a> {
                                                     .await;
                                             });
                                         }
-                                        RigTabState::Pending => {}
                                     }
                                 }
                                 Err(err) => {
@@ -328,7 +315,7 @@ impl AppTabs {
                     tab_id: next_tab_id(&mut self.next_tab_id),
                     state: RigTabState::Registered {
                         rig_id: s.id,
-                        status: PortStatus::Disconnected,
+                        status: ConnectionStatus::Connecting,
                     },
                     config: s.config,
                 })
@@ -345,7 +332,7 @@ impl AppTabs {
                         if tab.tab_id == *tab_id {
                             tab.state = RigTabState::Registered {
                                 rig_id,
-                                status: PortStatus::Disconnected,
+                                status: ConnectionStatus::Connecting,
                             };
                             break;
                         }
@@ -365,7 +352,7 @@ impl AppTabs {
             });
     }
 
-    fn update_device_status(&mut self, device_id: RigId, status: PortStatus) {
+    fn update_device_status(&mut self, device_id: RigId, status: ConnectionStatus) {
         for (_, tab) in self.dock_state.iter_all_tabs_mut() {
             if let RigTabState::Registered { rig_id, status: s } = &mut tab.state
                 && *rig_id == device_id
@@ -452,17 +439,8 @@ impl eframe::App for App {
                         ManagerMessage::AvailablePorts(ports) => {
                             self.tabs.available_ports = ports;
                         }
-                        ManagerMessage::DeviceConnected { device_id, .. } => {
-                            self.tabs
-                                .update_device_status(device_id, PortStatus::Connected);
-                        }
-                        ManagerMessage::DeviceDisconnected { device_id } => {
-                            self.tabs
-                                .update_device_status(device_id, PortStatus::Disconnected);
-                        }
-                        ManagerMessage::DeviceError { device_id, error } => {
-                            self.tabs
-                                .update_device_status(device_id, PortStatus::Error(error));
+                        ManagerMessage::ConnectionStatusChanged { device_id, status } => {
+                            self.tabs.update_device_status(device_id, status);
                         }
                         ManagerMessage::StatusUpdate { .. } => {}
                     }

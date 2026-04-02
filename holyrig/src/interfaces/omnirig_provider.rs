@@ -12,7 +12,7 @@ use crate::rig_settings::{RigId, RigSettings};
 use crate::runtime::RigFile;
 use crate::runtime::Value;
 use crate::serial::ManagerCommand;
-use crate::serial::manager::ManagerMessage;
+use crate::serial::manager::{ConnectionStatus, ManagerMessage};
 
 #[derive(Default)]
 struct CachedStatus {
@@ -203,19 +203,12 @@ impl HolyRigProvider {
                             }
                         }
                     }
-                    Ok(ManagerMessage::DeviceConnected { device_id, .. }) => {
+                    Ok(ManagerMessage::ConnectionStatusChanged { device_id, status }) => {
                         let slot = rig_ids_clone.iter().position(|id| *id == Some(device_id));
                         if let Some(slot) = slot {
-                            if let Some(status) = statuses_clone.get(slot) {
-                                status.write().connected = true;
-                            }
-                        }
-                    }
-                    Ok(ManagerMessage::DeviceDisconnected { device_id }) => {
-                        let slot = rig_ids_clone.iter().position(|id| *id == Some(device_id));
-                        if let Some(slot) = slot {
-                            if let Some(status) = statuses_clone.get(slot) {
-                                status.write().connected = false;
+                            if let Some(cached) = statuses_clone.get(slot) {
+                                cached.write().connected =
+                                    matches!(status, ConnectionStatus::Connected);
                             }
                         }
                     }
@@ -224,7 +217,7 @@ impl HolyRigProvider {
                         error!(%err, "OmniRig recv error");
                         break;
                     }
-                    Ok(ManagerMessage::DeviceError { .. } | ManagerMessage::AvailablePorts(_)) => {}
+                    Ok(ManagerMessage::AvailablePorts(_)) => {}
                 }
             }
         });

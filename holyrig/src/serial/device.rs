@@ -10,7 +10,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::rig_settings::{DataBits, RigConfig, RigId, RigSettings, StopBits};
 use crate::runtime::{ExternalApi, Interpreter, Value};
-use crate::serial::manager::{CommandResponse, ManagerMessage, StatusCache};
+use crate::serial::manager::{CommandResponse, ConnectionStatus, ManagerMessage, StatusCache};
 
 #[derive(Debug)]
 pub enum DeviceCommand {
@@ -257,7 +257,7 @@ pub struct DeviceTask {
     previous_values: HashMap<String, Value>,
     manager_tx: broadcast::Sender<ManagerMessage>,
     status_cache: StatusCache,
-    connected: bool,
+    status: ConnectionStatus,
 }
 
 impl DeviceTask {
@@ -277,8 +277,18 @@ impl DeviceTask {
             previous_values: HashMap::new(),
             manager_tx,
             status_cache,
-            connected: false,
+            status: ConnectionStatus::Connecting,
         }
+    }
+
+    fn set_status(&mut self, new_status: ConnectionStatus) {
+        self.status = new_status.clone();
+        let _ = self
+            .manager_tx
+            .send(ManagerMessage::ConnectionStatusChanged {
+                device_id: self.id,
+                status: new_status,
+            });
     }
 
     pub async fn run(
@@ -295,19 +305,17 @@ impl DeviceTask {
         loop {
             tokio::select! {
                 _ = poll_interval.tick() => {
-                    if self.connected {
-                        self.poll_status().await;
-                    }
+                    self.poll_status().await;
                 }
                 cmd = task_command_rx.recv() => {
                     match cmd {
                         Some(DeviceTaskCommand::ExecuteCommand {
                             command_name, params, response_tx
                         }) => {
-                            if self.connected {
+                            if matches!(self.status, ConnectionStatus::Connected) {
                                 self.handle_execute_command(command_name, params, response_tx).await;
                             } else if let Some(tx) = response_tx {
-                                let _ = tx.send(CommandResponse::Error("Device disconnected".into()));
+                                let _ = tx.send(CommandResponse::Error("Device not connected".into()));
                             }
                         }
                         Some(DeviceTaskCommand::Shutdown) | None => {
@@ -319,11 +327,8 @@ impl DeviceTask {
                 msg = serial_message_rx.recv() => {
                     match msg {
                         Some(DeviceMessage::Disconnected) => {
-                            self.connected = false;
                             info!(device_id = %self.id, "Device disconnected");
-                            let _ = self.manager_tx.send(ManagerMessage::DeviceDisconnected {
-                                device_id: self.id,
-                            });
+                            self.set_status(ConnectionStatus::Connecting);
                         }
                         Some(DeviceMessage::Reconnected) => {
                             info!(device_id = %self.id, "Device reconnected, re-initializing");
@@ -331,10 +336,7 @@ impl DeviceTask {
                         }
                         Some(DeviceMessage::Error(err)) => {
                             error!(device_id = %self.id, %err, "Serial device error");
-                            let _ = self.manager_tx.send(ManagerMessage::DeviceError {
-                                device_id: self.id,
-                                error: err,
-                            });
+                            self.set_status(ConnectionStatus::Error(err));
                         }
                         None => {
                             warn!(device_id = %self.id, "Serial I/O task exited");
@@ -350,12 +352,7 @@ impl DeviceTask {
         let api = DeviceExternalApi::new(self.serial_command_tx.clone());
         match self.interpreter.execute_init(&api).await {
             Ok(()) => {
-                self.connected = true;
                 info!(device_id = %self.id, "Device initialized");
-                let _ = self.manager_tx.send(ManagerMessage::DeviceConnected {
-                    device_id: self.id,
-                    rig_model: self.settings.config.rig_type.clone(),
-                });
             }
             Err(err) => {
                 error!(device_id = %self.id, %err, "Device initialization failed");
@@ -369,6 +366,11 @@ impl DeviceTask {
         if let Err(err) = self.interpreter.execute_status(&api).await {
             error!(device_id = %self.id, %err, "Status polling failed");
             return;
+        }
+
+        if matches!(self.status, ConnectionStatus::Connecting) {
+            info!(device_id = %self.id, "Device connected (first successful poll)");
+            self.set_status(ConnectionStatus::Connected);
         }
 
         let values = api.take_status_values();

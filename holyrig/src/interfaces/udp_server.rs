@@ -12,7 +12,7 @@ use tracing::{debug, info};
 use crate::resources::Resources;
 use crate::rig_settings::RigId;
 use crate::serial::ManagerCommand;
-use crate::serial::manager::{CommandResponse, ManagerMessage};
+use crate::serial::manager::{CommandResponse, ConnectionStatus, ManagerMessage};
 
 // Parse a command string in format: "DEVICE_ID COMMAND_NAME PARAM1=VALUE1 PARAM2=VALUE2"
 fn parse_command(cmd: &str) -> Result<(RigId, String, HashMap<String, String>)> {
@@ -113,11 +113,13 @@ pub async fn run_server(
             },
             response = message_receiver.recv() => {
                 let (mut udp_response, device_id) = match response? {
-                    ManagerMessage::DeviceConnected { device_id, rig_model: _ } => {
-                        (format!("Device {device_id} connected"), Some(device_id))
-                    },
-                    ManagerMessage::DeviceDisconnected { device_id } => {
-                        (format!("Device {device_id} disconnected"), Some(device_id))
+                    ManagerMessage::ConnectionStatusChanged { device_id, status } => {
+                        let status_str = match &status {
+                            ConnectionStatus::Connecting => "connecting",
+                            ConnectionStatus::Connected => "connected",
+                            ConnectionStatus::Error(e) => e.as_str(),
+                        };
+                        (format!("Device {device_id} {status_str}"), Some(device_id))
                     },
                     ManagerMessage::StatusUpdate { device_id, values } => {
                         let formatted_values: Vec<_> = values
@@ -127,7 +129,7 @@ pub async fn run_server(
 
                         (format!("Device {device_id} status update:\n{}\n", formatted_values.join("\n")), Some(device_id))
                     }
-                    ManagerMessage::DeviceError { .. } | ManagerMessage::AvailablePorts(_) => {
+                    ManagerMessage::AvailablePorts(_) => {
                         continue;
                     }
                 };

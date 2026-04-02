@@ -12,7 +12,7 @@ use super::{Notification, RigRpcHandler};
 use crate::interfaces::jsonrpc::{Request, Response, RpcError};
 use crate::resources::Resources;
 use crate::rig_settings::{RigId, RigSettings};
-use crate::serial::manager::{ManagerCommand, ManagerMessage, StatusCache};
+use crate::serial::manager::{ConnectionStatus, ManagerCommand, ManagerMessage, StatusCache};
 
 type Subscriptions = HashMap<(RigId, SocketAddr), Vec<String>>;
 
@@ -228,25 +228,18 @@ impl JsonRpcServer {
         socket: &UdpSocket,
     ) -> Result<()> {
         match message {
-            ManagerMessage::DeviceConnected {
-                device_id,
-                rig_model,
-            } => {
-                self.rigs_state.write().insert(device_id, (rig_model, true));
-                self.notify_connection_change(device_id, true, socket)
-                    .await?;
-            }
-            ManagerMessage::DeviceDisconnected { device_id } => {
+            ManagerMessage::ConnectionStatusChanged { device_id, status } => {
+                let connected = matches!(status, ConnectionStatus::Connected);
                 self.rigs_state
                     .write()
                     .entry(device_id)
                     .and_modify(|(_, is_connected)| {
-                        *is_connected = false;
+                        *is_connected = connected;
                     });
-                self.notify_connection_change(device_id, false, socket)
+                self.notify_connection_change(device_id, connected, socket)
                     .await?;
             }
-            ManagerMessage::DeviceError { .. } | ManagerMessage::AvailablePorts(_) => {}
+            ManagerMessage::AvailablePorts(_) => {}
             ManagerMessage::StatusUpdate { device_id, values } => {
                 let values: HashMap<_, _> = values
                     .into_iter()

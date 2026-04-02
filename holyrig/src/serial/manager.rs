@@ -15,6 +15,13 @@ use crate::serial::device::{DeviceTask, DeviceTaskCommand, SerialDevice};
 
 pub type StatusCache = Arc<RwLock<HashMap<RigId, HashMap<String, serde_json::Value>>>>;
 
+#[derive(Debug, Clone)]
+pub enum ConnectionStatus {
+    Connecting,
+    Connected,
+    Error(String),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SerialPortEntry {
     pub port_name: String,
@@ -69,16 +76,9 @@ pub enum ManagerCommand {
 
 #[derive(Debug, Clone)]
 pub enum ManagerMessage {
-    DeviceConnected {
+    ConnectionStatusChanged {
         device_id: RigId,
-        rig_model: String,
-    },
-    DeviceDisconnected {
-        device_id: RigId,
-    },
-    DeviceError {
-        device_id: RigId,
-        error: String,
+        status: ConnectionStatus,
     },
     StatusUpdate {
         device_id: RigId,
