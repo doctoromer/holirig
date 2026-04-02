@@ -9,9 +9,6 @@ pub enum Command {
     Caps {
         rig_id: usize,
     },
-    Status {
-        rig_id: usize,
-    },
     Execute {
         rig_id: usize,
         command: String,
@@ -59,10 +56,7 @@ impl std::fmt::Display for ParseError {
                 write!(f, "Missing rig_id. Usage: {command} <rig_id>")
             }
             ParseError::InvalidRigId { command, got } => {
-                write!(
-                    f,
-                    "Invalid rig_id: '{got}'. Usage: {command} <rig_id>"
-                )
+                write!(f, "Invalid rig_id: '{got}'. Usage: {command} <rig_id>")
             }
             ParseError::UnknownRigCommand { command, rig_id } => {
                 write!(
@@ -75,7 +69,10 @@ impl std::fmt::Display for ParseError {
                 rig_id,
                 usage,
             } => {
-                write!(f, "Wrong number of parameters. Usage: {command} {rig_id} {usage}")
+                write!(
+                    f,
+                    "Wrong number of parameters. Usage: {command} {rig_id} {usage}"
+                )
             }
             ParseError::InvalidParamValue {
                 param,
@@ -105,10 +102,6 @@ pub fn parse_command(input: &str, app: &App) -> Result<Command, ParseError> {
             let rig_id = parse_rig_id(parts.get(1), "caps")?;
             Ok(Command::Caps { rig_id })
         }
-        "status" => {
-            let rig_id = parse_rig_id(parts.get(1), "status")?;
-            Ok(Command::Status { rig_id })
-        }
         command => {
             let rig_id = match parse_rig_id(parts.get(1), command) {
                 Ok(id) => id,
@@ -134,15 +127,14 @@ pub fn parse_command(input: &str, app: &App) -> Result<Command, ParseError> {
 
 fn command_usage(command: &str, app: &App) -> String {
     for rig in &app.rigs {
-        if let Some(caps) = &rig.capabilities {
-            if let Some(params) = caps.commands.get(command) {
-                if params.is_empty() {
-                    return format!("{command} <rig_id>");
-                }
-                let params_str: Vec<String> =
-                    params.iter().map(|p| format!("<{}>", p.name)).collect();
-                return format!("{command} <rig_id> {}", params_str.join(" "));
+        if let Some(caps) = &rig.capabilities
+            && let Some(params) = caps.commands.get(command)
+        {
+            if params.is_empty() {
+                return format!("{command} <rig_id>");
             }
+            let params_str: Vec<String> = params.iter().map(|p| format!("<{}>", p.name)).collect();
+            return format!("{command} <rig_id> {}", params_str.join(" "));
         }
     }
     format!("{command} <rig_id> [params..]")
@@ -245,7 +237,6 @@ Commands:
   help                          Show this help
   list_rigs                     List available rigs and connection state
   caps <rig_id>                 Show rig capabilities (commands & status fields)
-  status <rig_id>               Show current cached status for a rig
   <command> <rig_id> [params..] Execute a command (e.g. 'freq 0 14250000')"
         .to_string()
 }

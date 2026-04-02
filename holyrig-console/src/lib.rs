@@ -134,24 +134,6 @@ async fn handle_command(app: &mut App, sender: &net::UdpSender, input: &str) {
         Ok(Command::Help) => {
             app.push_response(commands::help_text());
         }
-        Ok(Command::Status { rig_id }) => {
-            if let Some(rig) = app.rigs.iter().find(|rig| rig.rig_id == rig_id) {
-                let mut lines = Vec::new();
-                let mut keys: Vec<&String> = rig.status.keys().collect();
-                keys.sort();
-                for key in keys {
-                    let v = ui::format_status_value(key, &rig.status[key]);
-                    lines.push(format!("{key}: {v}"));
-                }
-                if lines.is_empty() {
-                    app.push_response("No status data".into());
-                } else {
-                    app.push_response(lines.join(", "));
-                }
-            } else {
-                app.push_error(format!("Unknown rig {rig_id}"));
-            }
-        }
         Ok(Command::ListRigs) => {
             let request = protocol::list_rigs_request();
             send_and_display(app, sender, &request).await;
