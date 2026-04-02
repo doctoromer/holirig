@@ -6,6 +6,7 @@ use eframe::egui;
 use holyrig::interfaces::jsonrpc::JsonRpcServer;
 use holyrig::resources::{ResourceError, Resources};
 use tracing::{error, info};
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, Registry, prelude::*};
 
 use holyrig::interfaces::rigctld;
@@ -50,8 +51,20 @@ fn init_tracing(
         .join("holyrig")
         .join("logs");
 
-    let debug_appender = tracing_appender::rolling::daily(&log_dir, "debug.log");
-    let trace_appender = tracing_appender::rolling::daily(&log_dir, "trace.log");
+    let debug_appender = RollingFileAppender::builder()
+        .max_log_files(100)
+        .rotation(Rotation::DAILY)
+        .filename_prefix("debug")
+        .filename_suffix(".log")
+        .build(&log_dir)
+        .unwrap();
+    let trace_appender = RollingFileAppender::builder()
+        .max_log_files(100)
+        .rotation(Rotation::DAILY)
+        .filename_prefix("trace")
+        .filename_suffix(".log")
+        .build(&log_dir)
+        .unwrap();
     let (debug_writer, debug_guard) = tracing_appender::non_blocking(debug_appender);
     let (trace_writer, trace_guard) = tracing_appender::non_blocking(trace_appender);
 
