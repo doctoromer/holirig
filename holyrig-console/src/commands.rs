@@ -22,20 +22,29 @@ pub enum Command {
 
 pub enum ParseError {
     UnknownCommand(String),
-    MissingRigId,
-    InvalidRigId(String),
+    MissingRigId {
+        command: String,
+    },
+    InvalidRigId {
+        command: String,
+        got: String,
+    },
     UnknownRigCommand {
         command: String,
         rig_id: usize,
     },
     WrongParamCount {
-        expected: usize,
-        got: usize,
+        command: String,
+        rig_id: usize,
+        usage: String,
     },
     InvalidParamValue {
         param: String,
         expected_type: String,
         got: String,
+    },
+    UsageError {
+        usage: String,
     },
 }
 
@@ -46,16 +55,27 @@ impl std::fmt::Display for ParseError {
                 f,
                 "Unknown command: '{cmd}'. Type 'help' for available commands."
             ),
-            ParseError::MissingRigId => write!(f, "Missing rig_id argument"),
-            ParseError::InvalidRigId(s) => write!(f, "Invalid rig_id: '{s}'"),
+            ParseError::MissingRigId { command } => {
+                write!(f, "Missing rig_id. Usage: {command} <rig_id>")
+            }
+            ParseError::InvalidRigId { command, got } => {
+                write!(
+                    f,
+                    "Invalid rig_id: '{got}'. Usage: {command} <rig_id>"
+                )
+            }
             ParseError::UnknownRigCommand { command, rig_id } => {
                 write!(
                     f,
                     "Unknown command '{command}' for rig {rig_id}. Use 'caps {rig_id}' to see available commands."
                 )
             }
-            ParseError::WrongParamCount { expected, got } => {
-                write!(f, "Expected {expected} parameter(s), got {got}")
+            ParseError::WrongParamCount {
+                command,
+                rig_id,
+                usage,
+            } => {
+                write!(f, "Wrong number of parameters. Usage: {command} {rig_id} {usage}")
             }
             ParseError::InvalidParamValue {
                 param,
@@ -64,9 +84,10 @@ impl std::fmt::Display for ParseError {
             } => {
                 write!(
                     f,
-                    "Invalid value for '{param}' (expected {expected_type}): '{got}'"
+                    "Invalid value for '{param}': '{got}' is not a valid {expected_type}"
                 )
             }
+            ParseError::UsageError { usage } => write!(f, "Usage: {usage}"),
         }
     }
 }
@@ -81,15 +102,21 @@ pub fn parse_command(input: &str, app: &App) -> Result<Command, ParseError> {
         "help" => Ok(Command::Help),
         "list_rigs" => Ok(Command::ListRigs),
         "caps" => {
-            let rig_id = parse_rig_id(parts.get(1))?;
+            let rig_id = parse_rig_id(parts.get(1), "caps")?;
             Ok(Command::Caps { rig_id })
         }
         "status" => {
-            let rig_id = parse_rig_id(parts.get(1))?;
+            let rig_id = parse_rig_id(parts.get(1), "status")?;
             Ok(Command::Status { rig_id })
         }
         command => {
-            let rig_id = parse_rig_id(parts.get(1))?;
+            let rig_id = match parse_rig_id(parts.get(1), command) {
+                Ok(id) => id,
+                Err(_) => {
+                    let usage = command_usage(command, app);
+                    return Err(ParseError::UsageError { usage });
+                }
+            };
             let rig = app.rigs.iter().find(|r| r.rig_id == rig_id);
             let caps = rig.and_then(|r| r.capabilities.as_ref());
 
@@ -105,10 +132,30 @@ pub fn parse_command(input: &str, app: &App) -> Result<Command, ParseError> {
     }
 }
 
-fn parse_rig_id(arg: Option<&&str>) -> Result<usize, ParseError> {
-    let s = arg.ok_or(ParseError::MissingRigId)?;
-    s.parse()
-        .map_err(|_| ParseError::InvalidRigId(s.to_string()))
+fn command_usage(command: &str, app: &App) -> String {
+    for rig in &app.rigs {
+        if let Some(caps) = &rig.capabilities {
+            if let Some(params) = caps.commands.get(command) {
+                if params.is_empty() {
+                    return format!("{command} <rig_id>");
+                }
+                let params_str: Vec<String> =
+                    params.iter().map(|p| format!("<{}>", p.name)).collect();
+                return format!("{command} <rig_id> {}", params_str.join(" "));
+            }
+        }
+    }
+    format!("{command} <rig_id> [params..]")
+}
+
+fn parse_rig_id(arg: Option<&&str>, command: &str) -> Result<usize, ParseError> {
+    let s = arg.ok_or(ParseError::MissingRigId {
+        command: command.to_string(),
+    })?;
+    s.parse().map_err(|_| ParseError::InvalidRigId {
+        command: command.to_string(),
+        got: s.to_string(),
+    })
 }
 
 fn resolve_execute(
@@ -126,9 +173,19 @@ fn resolve_execute(
         })?;
 
     if value_args.len() != param_defs.len() {
+        let usage = if param_defs.is_empty() {
+            String::new()
+        } else {
+            param_defs
+                .iter()
+                .map(|p| format!("<{}>", p.name))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
         return Err(ParseError::WrongParamCount {
-            expected: param_defs.len(),
-            got: value_args.len(),
+            command: command.to_string(),
+            rig_id,
+            usage,
         });
     }
 
