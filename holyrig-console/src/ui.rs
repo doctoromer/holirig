@@ -6,6 +6,25 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::app::{App, EntryKind};
 
+pub fn format_status_value(key: &str, value: &serde_json::Value) -> String {
+    if key.contains("freq")
+        && let Some(hz) = value.as_i64().or_else(|| value.as_f64().map(|f| f as i64))
+    {
+        return format_frequency(hz);
+    }
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+fn format_frequency(hz: i64) -> String {
+    let mhz = hz / 1_000_000;
+    let khz = (hz % 1_000_000) / 1_000;
+    let remainder = hz % 1_000;
+    format!("{mhz}.{khz:03}.{remainder:03} MHz")
+}
+
 pub fn draw(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -62,10 +81,7 @@ fn draw_rig_panes(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             keys.sort();
             for key in keys {
                 let value = &rig.status[key];
-                let value_str = match value {
-                    serde_json::Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                };
+                let value_str = format_status_value(key, value);
                 lines.push(Line::from(vec![
                     Span::styled(
                         format!("{key}: "),

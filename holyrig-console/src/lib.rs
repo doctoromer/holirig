@@ -140,7 +140,7 @@ async fn handle_command(app: &mut App, sender: &net::UdpSender, input: &str) {
                 let mut keys: Vec<&String> = rig.status.keys().collect();
                 keys.sort();
                 for key in keys {
-                    let v = &rig.status[key];
+                    let v = ui::format_status_value(key, &rig.status[key]);
                     lines.push(format!("{key}: {v}"));
                 }
                 if lines.is_empty() {
