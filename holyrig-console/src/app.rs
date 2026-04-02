@@ -68,6 +68,12 @@ impl App {
         }
     }
 
+    pub fn set_connected(&mut self, rig_id: usize, connected: bool) {
+        if let Some(rig) = self.rigs.iter_mut().find(|r| r.rig_id == rig_id) {
+            rig.connected = connected;
+        }
+    }
+
     pub fn update_status(&mut self, rig_id: usize, updates: HashMap<String, Value>) {
         if let Some(rig) = self.rigs.iter_mut().find(|r| r.rig_id == rig_id) {
             for (k, v) in updates {

@@ -190,21 +190,33 @@ fn handle_server_message(app: &mut App, msg: ServerMessage) {
             }
         }
         ServerMessage::Notification(notification) => {
-            if notification.method == "status_update"
-                && let Some(rig_id) = notification.params.get("rig_id").and_then(|v| v.as_u64())
-            {
-                let rig_id = rig_id as usize;
-                if let Some(updates) = notification
-                    .params
-                    .get("updates")
-                    .and_then(|v| v.as_object())
-                {
-                    let updates: HashMap<String, Value> = updates
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
-                    app.update_status(rig_id, updates);
+            let rig_id = notification.params.get("rig_id").and_then(|v| v.as_u64());
+            match (notification.method.as_str(), rig_id) {
+                ("status_update", Some(rig_id)) => {
+                    let rig_id = rig_id as usize;
+                    if let Some(updates) = notification
+                        .params
+                        .get("updates")
+                        .and_then(|v| v.as_object())
+                    {
+                        let updates: HashMap<String, Value> = updates
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        app.update_status(rig_id, updates);
+                    }
                 }
+                ("connection_update", Some(rig_id)) => {
+                    let rig_id = rig_id as usize;
+                    if let Some(connected) = notification
+                        .params
+                        .get("connected")
+                        .and_then(|v| v.as_bool())
+                    {
+                        app.set_connected(rig_id, connected);
+                    }
+                }
+                _ => {}
             }
         }
     }

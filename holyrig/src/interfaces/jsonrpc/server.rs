@@ -190,6 +190,38 @@ impl JsonRpcServer {
         Ok(response)
     }
 
+    async fn notify_connection_change(
+        &self,
+        device_id: RigId,
+        connected: bool,
+        socket: &UdpSocket,
+    ) -> Result<()> {
+        let notification = Notification {
+            jsonrpc: super::VERSION.into(),
+            method: "connection_update".to_string(),
+            params: json!({
+                "rig_id": device_id,
+                "connected": connected,
+            }),
+        };
+        let packet = serde_json::to_vec(&notification).unwrap();
+
+        let clients: Vec<SocketAddr> = self
+            .registered_status
+            .read()
+            .keys()
+            .filter(|(id, _)| *id == device_id)
+            .map(|(_, addr)| *addr)
+            .collect();
+
+        for addr in clients {
+            if let Err(err) = socket.send_to(&packet, addr).await {
+                error!(%addr, %err, "Failed to send connection notification");
+            }
+        }
+        Ok(())
+    }
+
     async fn handle_manager_message(
         &self,
         message: ManagerMessage,
@@ -201,6 +233,8 @@ impl JsonRpcServer {
                 rig_model,
             } => {
                 self.rigs_state.write().insert(device_id, (rig_model, true));
+                self.notify_connection_change(device_id, true, socket)
+                    .await?;
             }
             ManagerMessage::DeviceDisconnected { device_id } => {
                 self.rigs_state
@@ -209,6 +243,8 @@ impl JsonRpcServer {
                     .and_modify(|(_, is_connected)| {
                         *is_connected = false;
                     });
+                self.notify_connection_change(device_id, false, socket)
+                    .await?;
             }
             ManagerMessage::DeviceError { .. } | ManagerMessage::AvailablePorts(_) => {}
             ManagerMessage::StatusUpdate { device_id, values } => {
