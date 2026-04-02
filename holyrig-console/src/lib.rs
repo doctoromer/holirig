@@ -157,8 +157,41 @@ async fn handle_command(app: &mut App, sender: &net::UdpSender, input: &str) {
             send_and_display(app, sender, &request).await;
         }
         Ok(Command::Caps { rig_id }) => {
-            let request = protocol::get_capabilities_request(rig_id);
-            send_and_display(app, sender, &request).await;
+            if let Some(rig) = app.rigs.iter().find(|r| r.rig_id == rig_id) {
+                if let Some(caps) = &rig.capabilities {
+                    let mut lines = Vec::new();
+
+                    lines.push("Commands:".to_string());
+                    let mut cmd_names: Vec<&String> = caps.commands.keys().collect();
+                    cmd_names.sort();
+                    for name in cmd_names {
+                        let params = &caps.commands[name];
+                        if params.is_empty() {
+                            lines.push(format!("  {name}"));
+                        } else {
+                            let params_str: Vec<String> = params
+                                .iter()
+                                .map(|p| format!("{}: {}", p.name, p.param_type))
+                                .collect();
+                            lines.push(format!("  {name}({})", params_str.join(", ")));
+                        }
+                    }
+
+                    lines.push("Status fields:".to_string());
+                    let mut field_names: Vec<&String> = caps.status_fields.keys().collect();
+                    field_names.sort();
+                    for name in field_names {
+                        let typ = &caps.status_fields[name];
+                        lines.push(format!("  {name}: {typ}"));
+                    }
+
+                    app.push_response(lines.join("\n"));
+                } else {
+                    app.push_response("No capabilities available".into());
+                }
+            } else {
+                app.push_error(format!("Unknown rig {rig_id}"));
+            }
         }
         Ok(Command::Execute {
             rig_id,
