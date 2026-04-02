@@ -89,6 +89,7 @@ fn init_tracing(
         )
         .init();
 
+    std::panic::set_hook(Box::new(tracing_panic::panic_hook));
     (debug_guard, trace_guard)
 }
 
