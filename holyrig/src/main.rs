@@ -8,7 +8,7 @@ use holyrig::resources::{ResourceError, Resources};
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, Registry, prelude::*};
 
-use holyrig::interfaces::{rigctld, udp_server};
+use holyrig::interfaces::rigctld;
 use holyrig::{gui, serial};
 
 use serial::manager::DeviceManager;
@@ -127,9 +127,7 @@ async fn main() -> Result<()> {
     let initial_rigs: Vec<_> = device_manager.initial_rigs().cloned().collect();
     let gui_command_sender = device_manager.sender();
     let gui_message_receiver = device_manager.receiver();
-    let udp_command_sender = device_manager.sender();
     let rigctld_command_sender = device_manager.sender();
-    let udp_message_receiver = device_manager.receiver();
     let rigctld_message_receiver = device_manager.receiver();
 
     #[cfg(windows)]
@@ -164,15 +162,6 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         let result = device_manager.run().await;
         info!(?result, "Manager exited");
-    });
-
-    let udp_resources = resources.clone();
-    tokio::spawn(async move {
-        if let Err(err) =
-            udp_server::run_server(udp_resources, udp_command_sender, udp_message_receiver).await
-        {
-            error!(%err, "UDP server error");
-        }
     });
 
     tokio::spawn(async move {
