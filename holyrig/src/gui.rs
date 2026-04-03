@@ -9,9 +9,155 @@ use egui_dock::{
     AllowedSplits, DockArea, DockState, NodeIndex, SurfaceIndex, TabViewer,
     tab_viewer::OnCloseResponse,
 };
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
+
+enum WindowBackend {
+    Unknown,
+    /// X11 or Windows — `Visible(false)` works
+    NativeHide,
+    /// Wayland — need raw surface manipulation
+    #[cfg(target_os = "linux")]
+    Wayland(*mut std::ffi::c_void),
+}
+
+// Safety: the Wayland surface pointer is only ever accessed from eframe's main thread
+// via hide_window/show_window in App::update(). It is never used from another thread.
+unsafe impl Send for WindowBackend {}
+
+impl WindowBackend {
+    fn detect(frame: &eframe::Frame) -> Self {
+        match frame.window_handle().map(|h| h.as_raw()) {
+            #[cfg(target_os = "linux")]
+            Ok(RawWindowHandle::Wayland(handle)) => WindowBackend::Wayland(handle.surface.as_ptr()),
+            Ok(RawWindowHandle::Xlib(_) | RawWindowHandle::Xcb(_)) => WindowBackend::NativeHide,
+            Ok(RawWindowHandle::Win32(_)) => WindowBackend::NativeHide,
+            _ => WindowBackend::NativeHide,
+        }
+    }
+
+    fn hide_window(&self, ctx: &egui::Context) {
+        match self {
+            WindowBackend::NativeHide => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
+            #[cfg(target_os = "linux")]
+            WindowBackend::Wayland(surface) => {
+                wayland_hide::hide_surface(*surface);
+            }
+            WindowBackend::Unknown => {}
+        }
+    }
+
+    fn show_window(&self, ctx: &egui::Context) {
+        match self {
+            WindowBackend::NativeHide => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            #[cfg(target_os = "linux")]
+            WindowBackend::Wayland(_) => {
+                // eframe's next render will attach a buffer and commit,
+                // remapping the surface. Just request repaint + focus.
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            WindowBackend::Unknown => {}
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod wayland_hide {
+    use std::ffi::c_void;
+    use wayland_sys::client::{wayland_client_handle, wl_proxy};
+    use wayland_sys::common::wl_argument;
+
+    const WL_SURFACE_ATTACH: u32 = 1;
+    const WL_SURFACE_COMMIT: u32 = 6;
+
+    /// Hide a Wayland surface by attaching a null buffer and committing.
+    pub fn hide_surface(surface: *mut c_void) {
+        let lib = wayland_client_handle();
+        unsafe {
+            let mut args = [
+                wl_argument {
+                    o: std::ptr::null_mut(),
+                }, // buffer = null
+                wl_argument { i: 0 }, // x = 0
+                wl_argument { i: 0 }, // y = 0
+            ];
+            (lib.wl_proxy_marshal_array)(
+                surface as *mut wl_proxy,
+                WL_SURFACE_ATTACH,
+                args.as_mut_ptr(),
+            );
+            (lib.wl_proxy_marshal_array)(
+                surface as *mut wl_proxy,
+                WL_SURFACE_COMMIT,
+                std::ptr::null_mut(),
+            );
+        }
+    }
+}
+
+pub enum TrayAction {
+    Show,
+    Quit,
+}
+
+pub fn spawn_tray_watcher() -> (
+    std::sync::mpsc::Receiver<TrayAction>,
+    std::sync::mpsc::SyncSender<egui::Context>,
+) {
+    let (tray_tx, tray_rx) = std::sync::mpsc::channel::<TrayAction>();
+    let (ctx_tx, ctx_rx) = std::sync::mpsc::sync_channel::<egui::Context>(1);
+
+    std::thread::spawn(move || {
+        use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent, menu::MenuEvent};
+
+        let ctx = match ctx_rx.recv() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        let tray_events = TrayIconEvent::receiver();
+        let menu_events = MenuEvent::receiver();
+
+        loop {
+            crossbeam_channel::select! {
+                recv(tray_events) -> msg => {
+                    if let Ok(TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    }) = msg {
+                        tray_tx.send(TrayAction::Show).ok();
+                        ctx.request_repaint();
+                    }
+                }
+                recv(menu_events) -> msg => {
+                    if let Ok(event) = msg {
+                        let action = if event.id == "show" {
+                            Some(TrayAction::Show)
+                        } else if event.id == "quit" {
+                            Some(TrayAction::Quit)
+                        } else {
+                            None
+                        };
+                        if let Some(action) = action {
+                            tray_tx.send(action).ok();
+                            ctx.request_repaint();
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    (tray_rx, ctx_tx)
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 struct TabId(u64);
@@ -408,6 +554,11 @@ impl AppTabs {
 pub struct App {
     message_receiver: broadcast::Receiver<ManagerMessage>,
     tabs: AppTabs,
+    tray_rx: std::sync::mpsc::Receiver<TrayAction>,
+    ctx_for_tray: Option<std::sync::mpsc::SyncSender<egui::Context>>,
+    should_quit: bool,
+    hidden: bool,
+    window_backend: WindowBackend,
 }
 
 impl App {
@@ -416,18 +567,102 @@ impl App {
         serial_sender: Sender<ManagerCommand>,
         rig_types: Vec<String>,
         initial_rigs: Vec<RigSettings>,
+        tray_rx: std::sync::mpsc::Receiver<TrayAction>,
+        ctx_tx: std::sync::mpsc::SyncSender<egui::Context>,
     ) -> Self {
         let mut tabs = AppTabs::new(serial_sender, rig_types);
         tabs.set_tabs(initial_rigs);
         App {
             message_receiver,
             tabs,
+            tray_rx,
+            ctx_for_tray: Some(ctx_tx),
+            should_quit: false,
+            hidden: false,
+            window_backend: WindowBackend::Unknown,
+        }
+    }
+}
+
+impl App {
+    fn handle_tray_action(&mut self, action: TrayAction, ctx: &egui::Context) {
+        match action {
+            TrayAction::Show => {
+                self.hidden = false;
+                self.window_backend.show_window(ctx);
+            }
+            TrayAction::Quit => {
+                self.hidden = false;
+                self.should_quit = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    fn drain_tray_actions(&mut self, ctx: &egui::Context) {
+        while let Ok(action) = self.tray_rx.try_recv() {
+            self.handle_tray_action(action, ctx);
         }
     }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Pump GTK events so libappindicator can process D-Bus messages.
+        #[cfg(target_os = "linux")]
+        while gtk::events_pending() {
+            gtk::main_iteration_do(false);
+        }
+
+        if let Some(tx) = self.ctx_for_tray.take() {
+            self.window_backend = WindowBackend::detect(_frame);
+            tx.send(ctx.clone()).ok();
+        }
+
+        if ctx.input(|i| i.viewport().close_requested()) && !self.should_quit {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.hidden = true;
+            self.window_backend.hide_window(ctx);
+        }
+
+        if self.hidden {
+            // On Wayland, blocking in update() prevents eframe from rendering
+            // a new buffer that would immediately remap the hidden surface.
+            #[cfg(target_os = "linux")]
+            if matches!(self.window_backend, WindowBackend::Wayland(_)) {
+                self.window_backend.hide_window(ctx);
+                loop {
+                    while gtk::events_pending() {
+                        gtk::main_iteration_do(false);
+                    }
+                    match self
+                        .tray_rx
+                        .recv_timeout(std::time::Duration::from_millis(50))
+                    {
+                        Ok(action) => {
+                            self.handle_tray_action(action, ctx);
+                            break;
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                            self.hidden = false;
+                            break;
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    }
+                }
+                if self.hidden {
+                    return;
+                }
+            }
+
+            self.drain_tray_actions(ctx);
+            if self.hidden {
+                return;
+            }
+        }
+
+        self.drain_tray_actions(ctx);
+
         self.tabs.poll_pending_creates();
 
         let mut has_messages = false;

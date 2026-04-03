@@ -8,6 +8,10 @@ use holyrig::resources::{ResourceError, Resources};
 use tracing::{error, info};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, Registry, prelude::*};
+use tray_icon::{
+    TrayIconBuilder,
+    menu::{Menu, MenuItem},
+};
 
 use holyrig::interfaces::rigctld;
 use holyrig::{gui, serial};
@@ -186,6 +190,32 @@ async fn main() -> Result<()> {
         }
     });
 
+    let (tray_rx, ctx_tx) = gui::spawn_tray_watcher();
+
+    #[cfg(target_os = "linux")]
+    gtk::init().expect("Failed to initialize GTK");
+
+    let _tray_icon = {
+        let show_item = MenuItem::with_id("show", "Show", true, None);
+        let quit_item = MenuItem::with_id("quit", "Quit", true, None);
+        let menu = Menu::new();
+        menu.append(&show_item).unwrap();
+        menu.append(&quit_item).unwrap();
+        let icon = {
+            let size = 32u32;
+            let rgba: Vec<u8> = (0..size * size)
+                .flat_map(|_| [70u8, 130, 180, 255])
+                .collect();
+            tray_icon::Icon::from_rgba(rgba, size, size).expect("Failed to create tray icon")
+        };
+        TrayIconBuilder::new()
+            .with_menu(Box::new(menu))
+            .with_icon(icon)
+            .with_tooltip("HolyRig")
+            .build()
+            .expect("Failed to build tray icon")
+    };
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([460.0, 430.0])
@@ -201,6 +231,8 @@ async fn main() -> Result<()> {
                 gui_command_sender,
                 resources.rigs.keys().cloned().collect(),
                 initial_rigs,
+                tray_rx,
+                ctx_tx,
             )))
         }),
     )
