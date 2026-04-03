@@ -37,10 +37,16 @@ thiserror = "2.0.18"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
+tray-icon = "0.21"
 tracing-panic = "0.1.2"
+raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 omnirig = { path = "../omnirig" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+wayland-sys = { version = "0.31", features = ["client", "dlopen"] }
 
 [profile.release]
 strip = true
