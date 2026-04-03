@@ -3,7 +3,7 @@ use std::fmt::Display;
 
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct RigId(usize);
+pub struct RigId(pub usize);
 
 impl std::fmt::Display for RigId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

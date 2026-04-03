@@ -173,7 +173,8 @@ async fn main() -> Result<()> {
         jsonrpc_command_receiver,
         jsonrpc_status_cache,
         &initial_rigs,
-    )?;
+    )
+    .await?;
 
     tokio::spawn(async move { jsonrpc_server.run().await });
 

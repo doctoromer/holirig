@@ -1,10 +1,12 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use parking_lot::RwLock;
+use serde::Serialize;
 use serde_json::json;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::net::UdpSocket;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error, info};
 
@@ -16,18 +18,26 @@ use crate::serial::manager::{ConnectionStatus, ManagerCommand, ManagerMessage, S
 
 type Subscriptions = HashMap<(RigId, SocketAddr), Vec<String>>;
 
+fn encode_message(message: &impl Serialize) -> Result<Vec<u8>> {
+    let data = serde_json::to_vec(message)?;
+    let mut frame = Vec::with_capacity(data.len() + 1);
+    frame.extend_from_slice(&data);
+    frame.push(b'\n');
+    Ok(frame)
+}
+
 pub struct JsonRpcServer {
-    bind_address: String,
-    port: u16,
+    listener: TcpListener,
     handlers: Arc<HashMap<String, RigRpcHandler>>,
     rigs_state: Arc<RwLock<HashMap<RigId, (String, bool)>>>,
     registered_status: Arc<RwLock<Subscriptions>>,
     status_cache: StatusCache,
     manager_rx: broadcast::Receiver<ManagerMessage>,
+    notification_tx: broadcast::Sender<Notification>,
 }
 
 impl JsonRpcServer {
-    pub fn new(
+    pub async fn new(
         bind_address: &str,
         port: u16,
         resources: Arc<Resources>,
@@ -52,181 +62,78 @@ impl JsonRpcServer {
             .map(|rig| (rig.id, (rig.config.rig_type.clone(), false)))
             .collect();
 
+        let addr = format!("{}:{}", bind_address, port);
+        let listener = TcpListener::bind(&addr).await?;
+        let (notification_tx, _) = broadcast::channel(64);
+
         Ok(Self {
-            bind_address: bind_address.to_string(),
-            port,
+            listener,
             handlers: Arc::new(handlers),
             rigs_state: Arc::new(RwLock::new(rigs_state)),
             registered_status: Arc::new(RwLock::new(HashMap::new())),
             status_cache,
             manager_rx,
+            notification_tx,
         })
     }
 
-    pub async fn run(mut self) -> Result<()> {
-        let addr = format!("{}:{}", self.bind_address, self.port);
+    async fn spawn_client_task(&self, stream: TcpStream, addr: SocketAddr) {
+        let handlers = self.handlers.clone();
+        let rigs_state = self.rigs_state.clone();
+        let registered_status = self.registered_status.clone();
+        let status_cache = self.status_cache.clone();
+        let notification_rx = self.notification_tx.subscribe();
 
         tokio::spawn(async move {
-            let socket = UdpSocket::bind(&addr).await.unwrap();
-            info!(%addr, "JSON-RPC UDP server listening");
+            if let Err(err) = handle_client(
+                stream,
+                addr,
+                handlers,
+                rigs_state,
+                registered_status,
+                status_cache,
+                notification_rx,
+            )
+            .await
+            {
+                error!(%addr, %err, "Client connection error");
+            }
+        });
+    }
 
-            let mut buf = vec![0u8; 2048];
-            loop {
-                tokio::select! {
-                    received = socket.recv_from(&mut buf) => {
-                         match received {
-                            Ok((len, src_addr)) => {
-                                let response = match self.handle_packet(&buf[..len], src_addr).await {
-                                    Ok(response) => response,
-                                    Err(err) => {
-                                        if let Some(rpc_error) = err.downcast_ref::<RpcError>() {
-                                            error!(%err, "Error handling UDP datagram");
-                                            Response::build_error(rpc_error.clone())
-                                        } else {
-                                            continue;
-                                        }
-                                    },
-                                };
-                                let error_data = serde_json::to_vec(&response).unwrap();
-                                socket.send_to(&error_data, src_addr).await.unwrap();
-                            },
-                            Err(err) => {
-                                error!(%err, "Failed to receive data");
-                            }
+    pub async fn run(mut self) -> Result<()> {
+        info!(
+            "JSON-RPC TCP server listening on {}",
+            self.listener.local_addr()?
+        );
+
+        loop {
+            tokio::select! {
+                result = self.listener.accept() => {
+                    match result {
+                        Ok((stream, addr)) => {
+                            self.spawn_client_task(stream, addr).await;
                         }
-                    }
-                    message = self.manager_rx.recv() => {
-                        let message = message.unwrap();
-                        if let Err(err) = self.handle_manager_message(message, &socket).await {
-                            error!(%err, "Error handling manager message");
+                        Err(err) => {
+                            error!(listen_addr = ?self.listener.local_addr(), %err, "Failed to accept connection");
                         }
                     }
                 }
-            }
-        });
-        Ok(())
-    }
-
-    async fn handle_packet(&self, data: &[u8], src_addr: SocketAddr) -> Result<Response> {
-        debug!(
-            data = String::from_utf8_lossy(data).as_ref(),
-            "Received packet"
-        );
-        let request = serde_json::from_slice::<Request>(data)
-            .map_err(|err| anyhow!(RpcError::parse_error(&err)))?;
-        let response = match request.method.as_str() {
-            "list_rigs" => {
-                let rigs = serde_json::Value::Object(
-                    self.rigs_state
-                        .read()
-                        .iter()
-                        .map(|(device_id, (_, is_connected))| {
-                            (
-                                device_id.to_string(),
-                                serde_json::Value::Bool(*is_connected),
-                            )
-                        })
-                        .collect(),
-                );
-                Response::build_result(request.id, rigs)
-            }
-            "get_status" => {
-                let id = request
-                    .get_rig_id()
-                    .ok_or_else(|| anyhow!(RpcError::missing_rig_id()))?;
-                let cached = self.status_cache.read();
-                let values = cached.get(&id).cloned().unwrap_or_default();
-                let json_values: serde_json::Map<String, serde_json::Value> =
-                    values.into_iter().collect();
-                Response::build_result(request.id, serde_json::Value::Object(json_values))
-            }
-            "subscribe_status" => {
-                let id = request
-                    .get_rig_id()
-                    .ok_or_else(|| anyhow!(RpcError::missing_rig_id()))?;
-                let fields = request
-                    .params
-                    .as_ref()
-                    .and_then(|params| params.as_object())
-                    .and_then(|params| params.get("fields"))
-                    .and_then(|fields| fields.as_array())
-                    .and_then(|fields| {
-                        fields
-                            .iter()
-                            .map(|field| field.as_str().map(|field| field.to_string()))
-                            .collect::<Option<Vec<_>>>()
-                    })
-                    .ok_or_else(|| anyhow!(RpcError::invalid_params().with_id(&request.id)))?;
-
-                let rigs_state = self.rigs_state.read();
-                let (rig_model, _) = rigs_state
-                    .get(&id)
-                    .ok_or_else(|| anyhow!(RpcError::unknown_rig_id(id)))?;
-                let handler = self.handlers.get(rig_model).unwrap();
-                handler.check_fields(&fields).map_err(|fields| {
-                    anyhow!(RpcError::unknown_fields(fields).with_id(&request.id))
-                })?;
-                self.registered_status
-                    .write()
-                    .insert((id, src_addr), fields);
-
-                Response::build_success(request.id)
-            }
-            _ => {
-                let id = request
-                    .get_rig_id()
-                    .ok_or_else(|| anyhow!(RpcError::missing_rig_id().with_id(&request.id)))?;
-                let handler = {
-                    let rigs = self.rigs_state.read();
-                    let (rig_model, _) = rigs.get(&id).unwrap();
-                    self.handlers
-                        .get(rig_model)
-                        .ok_or_else(|| anyhow!(RpcError::unknown_rig_id(id).with_id(&request.id)))?
-                };
-                handler.handle_request(&request, id).await?
-            }
-        };
-
-        Ok(response)
-    }
-
-    async fn notify_connection_change(
-        &self,
-        device_id: RigId,
-        connected: bool,
-        socket: &UdpSocket,
-    ) -> Result<()> {
-        let notification = Notification {
-            jsonrpc: super::VERSION.into(),
-            method: "connection_update".to_string(),
-            params: json!({
-                "rig_id": device_id,
-                "connected": connected,
-            }),
-        };
-        let packet = serde_json::to_vec(&notification).unwrap();
-
-        let clients: Vec<SocketAddr> = self
-            .registered_status
-            .read()
-            .keys()
-            .filter(|(id, _)| *id == device_id)
-            .map(|(_, addr)| *addr)
-            .collect();
-
-        for addr in clients {
-            if let Err(err) = socket.send_to(&packet, addr).await {
-                error!(%addr, %err, "Failed to send connection notification");
+                message = self.manager_rx.recv() => {
+                    match message {
+                        Ok(msg) => {
+                            if let Err(err) = self.handle_manager_message(msg).await {
+                                error!(%err, "Error handling manager message");
+                            }
+                        }
+                        Err(_) => return Ok(()),
+                    }
+                }
             }
         }
-        Ok(())
     }
 
-    async fn handle_manager_message(
-        &self,
-        message: ManagerMessage,
-        socket: &UdpSocket,
-    ) -> Result<()> {
+    async fn handle_manager_message(&self, message: ManagerMessage) -> Result<()> {
         match message {
             ManagerMessage::ConnectionStatusChanged { device_id, status } => {
                 let connected = matches!(status, ConnectionStatus::Connected);
@@ -236,8 +143,17 @@ impl JsonRpcServer {
                     .and_modify(|(_, is_connected)| {
                         *is_connected = connected;
                     });
-                self.notify_connection_change(device_id, connected, socket)
-                    .await?;
+
+                let notification = Notification {
+                    jsonrpc: super::VERSION.into(),
+                    method: "connection_update".to_string(),
+                    params: json!({
+                        "rig_id": device_id,
+                        "connected": connected,
+                    }),
+                };
+
+                let _ = self.notification_tx.send(notification);
             }
             ManagerMessage::AvailablePorts(_) => {}
             ManagerMessage::StatusUpdate { device_id, values } => {
@@ -246,42 +162,226 @@ impl JsonRpcServer {
                     .map(|(k, v)| (k, serde_json::Value::from(v)))
                     .collect();
 
-                let clients: Vec<_> = self
-                    .registered_status
-                    .read()
-                    .clone()
-                    .into_iter()
-                    .filter(|((id, _), _)| *id == device_id)
-                    .collect();
+                let notification = Notification {
+                    jsonrpc: super::VERSION.into(),
+                    method: "status_update".to_string(),
+                    params: json!({
+                        "rig_id": device_id,
+                        "updates": values,
+                    }),
+                };
 
-                for ((_, addr), fields) in clients {
-                    let values: HashMap<_, _> = values
-                        .iter()
-                        .filter_map(|(k, v)| {
-                            if fields.contains(k) {
-                                Some((k.clone(), v.clone()))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-
-                    let notification = Notification {
-                        jsonrpc: super::VERSION.into(),
-                        method: "status_update".to_string(),
-                        params: json!({
-                            "rig_id": device_id,
-                            "updates": values,
-                        }),
-                    };
-                    let packet = serde_json::to_vec(&notification).unwrap();
-                    if let Err(err) = socket.send_to(&packet, addr).await {
-                        error!(%addr, %err, "Failed to send notification");
-                        self.registered_status.write().remove(&(device_id, addr));
-                    }
-                }
+                let _ = self.notification_tx.send(notification);
             }
         }
         Ok(())
+    }
+}
+
+async fn handle_client(
+    stream: tokio::net::TcpStream,
+    addr: SocketAddr,
+    handlers: Arc<HashMap<String, RigRpcHandler>>,
+    rigs_state: Arc<RwLock<HashMap<RigId, (String, bool)>>>,
+    registered_status: Arc<RwLock<Subscriptions>>,
+    status_cache: StatusCache,
+    mut notification_rx: broadcast::Receiver<Notification>,
+) -> Result<()> {
+    info!(%addr, "New client connection");
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = tokio::io::BufReader::new(reader);
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+
+        tokio::select! {
+            result = reader.read_line(&mut line) => {
+                match result {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let line = line.trim_end();
+                        if line.is_empty() {
+                            continue;
+                        }
+                        match serde_json::from_str::<Request>(line) {
+                            Ok(request) => {
+                                debug!(method = %request.method, "Received request");
+                                let response = handle_request(
+                                    &handlers,
+                                    &rigs_state,
+                                    &registered_status,
+                                    &status_cache,
+                                    &addr,
+                                    request,
+                                )
+                                .await;
+
+                                let msg = encode_message(&response)?;
+                                writer.write_all(&msg).await?;
+                            }
+                            Err(err) => {
+                                error!(%err, "Invalid JSON");
+                                let response = Response::build_error(RpcError::parse_error(&err));
+                                let msg = encode_message(&response)?;
+                                if writer.write_all(&msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        error!(%err, "Read error");
+                        break;
+                    }
+                }
+            }
+            notification = notification_rx.recv() => {
+                match notification {
+                    Ok(notification) => {
+                        // Extract rig_id from notification and check subscriptions
+                        let Some(rig_id) = notification.params.get("rig_id").and_then(|v| {
+                            v.as_str().and_then(|s| s.parse::<usize>().ok().map(RigId))
+                        }) else {
+                            continue;
+                        };
+
+                        let fields = {
+                            let subscriptions = registered_status.read();
+                            subscriptions.get(&(rig_id, addr)).cloned()
+                        };
+
+                        if let Some(fields) = fields {
+                            // Filter updates to only requested fields
+                            if let Some(updates) = notification.params.get("updates").and_then(|v| v.as_object()) {
+                                let filtered: serde_json::Map<_, _> = updates
+                                    .iter()
+                                    .filter(|(key, _)| fields.contains(key))
+                                    .map(|(key, value)| (key.clone(), value.clone()))
+                                    .collect();
+
+                                let filtered_notification = Notification {
+                                    jsonrpc: notification.jsonrpc.clone(),
+                                    method: notification.method.clone(),
+                                    params: json!({
+                                        "rig_id": rig_id,
+                                        "updates": filtered,
+                                    }),
+                                };
+                                let msg = encode_message(&filtered_notification)?;
+                                if writer.write_all(&msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                        } else if notification.method == "connection_update" {
+                            let msg = encode_message(&notification)?;
+                            if writer.write_all(&msg).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        }
+    }
+
+    info!(%addr, "Client connection closed");
+    Ok(())
+}
+
+async fn handle_request(
+    handlers: &Arc<HashMap<String, RigRpcHandler>>,
+    rigs_state: &Arc<RwLock<HashMap<RigId, (String, bool)>>>,
+    registered_status: &Arc<RwLock<Subscriptions>>,
+    status_cache: &StatusCache,
+    addr: &SocketAddr,
+    request: Request,
+) -> Response {
+    let method = request.method.as_str();
+    if method == "list_rigs" {
+        let rigs = serde_json::Value::Object(
+            rigs_state
+                .read()
+                .iter()
+                .map(|(device_id, (_, is_connected))| {
+                    (
+                        device_id.to_string(),
+                        serde_json::Value::Bool(*is_connected),
+                    )
+                })
+                .collect(),
+        );
+        return Response::build_result(request.id, rigs);
+    };
+
+    let Some(id) = request.get_rig_id() else {
+        return Response::build_error(RpcError::missing_rig_id().with_id(&request.id));
+    };
+
+    match request.method.as_str() {
+        "get_status" => {
+            let cached = status_cache.read();
+            let values = cached.get(&id).cloned().unwrap_or_default();
+            let json_values: serde_json::Map<String, serde_json::Value> =
+                values.into_iter().collect();
+            Response::build_result(request.id, serde_json::Value::Object(json_values))
+        }
+        "subscribe_status" => {
+            let fields = request
+                .params
+                .as_ref()
+                .and_then(|params| params.as_object())
+                .and_then(|params| params.get("fields"))
+                .and_then(|fields| fields.as_array())
+                .and_then(|fields| {
+                    fields
+                        .iter()
+                        .map(|field| field.as_str().map(|field| field.to_string()))
+                        .collect::<Option<Vec<_>>>()
+                });
+
+            match fields {
+                Some(fields) => {
+                    let rigs_state_lock = rigs_state.read();
+                    if let Some((rig_model, _)) = rigs_state_lock.get(&id)
+                        && let Some(handler) = handlers.get(rig_model)
+                    {
+                        match handler.check_fields(&fields) {
+                            Ok(_) => {
+                                registered_status.write().insert((id, *addr), fields);
+                                Response::build_success(request.id)
+                            }
+                            Err(bad_fields) => Response::build_error(
+                                RpcError::unknown_fields(bad_fields).with_id(&request.id),
+                            ),
+                        }
+                    } else {
+                        Response::build_error(RpcError::unknown_rig_id(id).with_id(&request.id))
+                    }
+                }
+                None => Response::build_error(RpcError::invalid_params().with_id(&request.id)),
+            }
+        }
+        _ => {
+            let rig_model = {
+                let rigs_state_lock = rigs_state.read();
+                rigs_state_lock.get(&id).map(|(m, _)| m.clone())
+            };
+
+            if let Some(rig_model) = rig_model
+                && let Some(handler) = handlers.get(&rig_model)
+            {
+                match handler.handle_request(&request, id).await {
+                    Ok(r) => r,
+                    Err(err) => {
+                        Response::build_error(RpcError::rig_communication_error(err.to_string()))
+                    }
+                }
+            } else {
+                Response::build_error(RpcError::unknown_rig_id(id).with_id(&request.id))
+            }
+        }
     }
 }
