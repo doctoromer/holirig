@@ -5,7 +5,7 @@ use omnirig::{DummyPortBits, OmniRigProvider, PortBitsControl, RigControl, RigPa
 use parking_lot::RwLock;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::Sender;
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::resources::Resources;
 use crate::rig_settings::{RigId, RigSettings};
@@ -231,7 +231,10 @@ impl HolyRigProvider {
     }
 
     fn create_rig(&self, slot: usize) -> Box<dyn RigControl> {
-        let device_id = self.rig_ids[slot].expect("Rig slot not populated");
+        let Some(device_id) = self.rig_ids[slot] else {
+            warn!(slot, "OmniRig requested rig for unconfigured slot");
+            return Box::new(UnconfiguredRig);
+        };
         Box::new(HolyRigControl {
             device_id,
             command_sender: self.command_sender.clone(),
@@ -248,6 +251,102 @@ impl OmniRigProvider for HolyRigProvider {
 
     fn create_rig2(&self) -> Box<dyn RigControl> {
         self.create_rig(1)
+    }
+}
+
+struct UnconfiguredRig;
+
+impl RigControl for UnconfiguredRig {
+    fn rig_type(&self) -> String {
+        "Not configured".to_string()
+    }
+
+    fn status(&self) -> RigStatusX {
+        RigStatusX::NotConfigured
+    }
+
+    fn status_str(&self) -> String {
+        "Not configured".to_string()
+    }
+
+    fn readable_params(&self) -> i32 {
+        0
+    }
+
+    fn writeable_params(&self) -> i32 {
+        0
+    }
+
+    fn freq(&self) -> i32 {
+        0
+    }
+
+    fn set_freq(&self, _value: i32) {}
+
+    fn freq_a(&self) -> i32 {
+        0
+    }
+
+    fn set_freq_a(&self, _value: i32) {}
+
+    fn freq_b(&self) -> i32 {
+        0
+    }
+
+    fn set_freq_b(&self, _value: i32) {}
+
+    fn rit_offset(&self) -> i32 {
+        0
+    }
+
+    fn set_rit_offset(&self, _value: i32) {}
+
+    fn pitch(&self) -> i32 {
+        0
+    }
+
+    fn set_pitch(&self, _value: i32) {}
+
+    fn vfo(&self) -> RigParamX {
+        RigParamX::Unknown
+    }
+
+    fn set_vfo(&self, _value: RigParamX) {}
+
+    fn split(&self) -> RigParamX {
+        RigParamX::Unknown
+    }
+
+    fn set_split(&self, _value: RigParamX) {}
+
+    fn rit(&self) -> RigParamX {
+        RigParamX::Unknown
+    }
+
+    fn set_rit(&self, _value: RigParamX) {}
+
+    fn xit(&self) -> RigParamX {
+        RigParamX::Unknown
+    }
+
+    fn set_xit(&self, _value: RigParamX) {}
+
+    fn tx(&self) -> RigParamX {
+        RigParamX::Unknown
+    }
+
+    fn set_tx(&self, _value: RigParamX) {}
+
+    fn mode(&self) -> RigParamX {
+        RigParamX::Unknown
+    }
+
+    fn set_mode(&self, _value: RigParamX) {}
+
+    fn send_custom_command(&self, _command: &[u8], _reply_length: i32, _reply_end: &[u8]) {}
+
+    fn port_bits(&self) -> Option<Box<dyn PortBitsControl>> {
+        Some(Box::new(DummyPortBits::new()))
     }
 }
 
