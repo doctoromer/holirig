@@ -23,11 +23,11 @@ use tokio::sync::mpsc;
 use app::{App, Capabilities, CommandParam};
 use commands::Command;
 use input::InputAction;
-use net::UdpClient;
+use net::TcpClient;
 use protocol::ServerMessage;
 
 pub async fn run(addr: SocketAddr) -> Result<()> {
-    let client = UdpClient::connect(addr).await?;
+    let mut client = TcpClient::connect(addr).await?;
     let mut app = App::new();
 
     let list_req = protocol::list_rigs_request();
@@ -70,7 +70,7 @@ pub async fn run(addr: SocketAddr) -> Result<()> {
         }
     }
 
-    let (sender, receiver) = client.into_split();
+    let (mut sender, receiver) = client.into_split();
     let (msg_tx, mut msg_rx) = mpsc::channel::<ServerMessage>(64);
 
     tokio::spawn(async move {
@@ -83,7 +83,7 @@ pub async fn run(addr: SocketAddr) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_loop(&mut terminal, &mut app, &sender, &mut msg_rx).await;
+    let result = run_loop(&mut terminal, &mut app, &mut sender, &mut msg_rx).await;
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -95,7 +95,7 @@ pub async fn run(addr: SocketAddr) -> Result<()> {
 async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
-    sender: &net::UdpSender,
+    sender: &mut net::TcpSender,
     msg_rx: &mut mpsc::Receiver<ServerMessage>,
 ) -> Result<()> {
     let tick_rate = Duration::from_millis(60);
@@ -129,7 +129,7 @@ async fn run_loop(
     Ok(())
 }
 
-async fn handle_command(app: &mut App, sender: &net::UdpSender, input: &str) {
+async fn handle_command(app: &mut App, sender: &mut net::TcpSender, input: &str) {
     match commands::parse_command(input, app) {
         Ok(Command::Help) => {
             app.push_response(commands::help_text());
@@ -189,7 +189,7 @@ async fn handle_command(app: &mut App, sender: &net::UdpSender, input: &str) {
     }
 }
 
-async fn send_and_display(app: &mut App, sender: &net::UdpSender, request: &protocol::Request) {
+async fn send_and_display(app: &mut App, sender: &mut net::TcpSender, request: &protocol::Request) {
     if let Err(e) = sender.send_request(request).await {
         app.push_error(format!("Send failed: {e}"));
     }

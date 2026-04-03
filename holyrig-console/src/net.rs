@@ -1,91 +1,96 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
-use tokio::net::UdpSocket;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use crate::protocol::{self, Request, Response, ServerMessage};
 
 const TIMEOUT: Duration = Duration::from_secs(2);
-const BUF_SIZE: usize = 2048;
 
-pub struct UdpClient {
-    socket: UdpSocket,
-    server_addr: SocketAddr,
+pub struct TcpClient {
+    reader: BufReader<OwnedReadHalf>,
+    writer: OwnedWriteHalf,
 }
 
-impl UdpClient {
+impl TcpClient {
     pub async fn connect(server_addr: SocketAddr) -> Result<Self> {
-        let socket = UdpSocket::bind("0.0.0.0:0").await?;
+        let stream = TcpStream::connect(server_addr).await?;
+        let (reader, writer) = stream.into_split();
         Ok(Self {
-            socket,
-            server_addr,
+            reader: BufReader::new(reader),
+            writer,
         })
     }
 
-    pub async fn send_request(&self, request: &Request) -> Result<()> {
-        let data = serde_json::to_vec(request)?;
-        self.socket.send_to(&data, self.server_addr).await?;
+    async fn send_request(&mut self, request: &Request) -> Result<()> {
+        let mut data = serde_json::to_vec(request)?;
+        data.push(b'\n');
+        self.writer.write_all(&data).await?;
         Ok(())
     }
 
-    pub async fn send_and_wait(&self, request: &Request) -> Result<Response> {
+    pub async fn send_and_wait(&mut self, request: &Request) -> Result<Response> {
         self.send_request(request).await?;
-        let mut buf = vec![0u8; BUF_SIZE];
-        let deadline = tokio::time::Instant::now() + TIMEOUT;
+        let mut line = String::new();
         loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                bail!("Server timeout");
-            }
-            let (len, _) = timeout(remaining, self.socket.recv_from(&mut buf))
+            line.clear();
+            let n = timeout(TIMEOUT, self.reader.read_line(&mut line))
                 .await
                 .map_err(|_| anyhow::anyhow!("Server timeout"))??;
-            match protocol::parse_server_message(&buf[..len])? {
+            if n == 0 {
+                bail!("Server disconnected");
+            }
+            match protocol::parse_server_message(line.trim_end().as_bytes())? {
                 ServerMessage::Response(resp) => return Ok(resp),
                 ServerMessage::Notification(_) => continue,
             }
         }
     }
 
-    pub fn into_split(self) -> (UdpSender, UdpReceiver) {
-        let socket = Arc::new(self.socket);
+    pub fn into_split(self) -> (TcpSender, TcpReceiver) {
         (
-            UdpSender {
-                socket: socket.clone(),
-                server_addr: self.server_addr,
+            TcpSender {
+                writer: self.writer,
             },
-            UdpReceiver { socket },
+            TcpReceiver {
+                reader: self.reader,
+            },
         )
     }
 }
 
-pub struct UdpSender {
-    socket: Arc<UdpSocket>,
-    server_addr: SocketAddr,
+pub struct TcpSender {
+    writer: OwnedWriteHalf,
 }
 
-impl UdpSender {
-    pub async fn send_request(&self, request: &Request) -> Result<()> {
-        let data = serde_json::to_vec(request)?;
-        self.socket.send_to(&data, self.server_addr).await?;
+impl TcpSender {
+    pub async fn send_request(&mut self, request: &Request) -> Result<()> {
+        let mut data = serde_json::to_vec(request)?;
+        data.push(b'\n');
+        self.writer.write_all(&data).await?;
         Ok(())
     }
 }
 
-pub struct UdpReceiver {
-    socket: Arc<UdpSocket>,
+pub struct TcpReceiver {
+    reader: BufReader<OwnedReadHalf>,
 }
 
-impl UdpReceiver {
-    pub async fn run(self, tx: mpsc::Sender<ServerMessage>) -> Result<()> {
-        let mut buf = vec![0u8; BUF_SIZE];
+impl TcpReceiver {
+    pub async fn run(mut self, tx: mpsc::Sender<ServerMessage>) -> Result<()> {
+        let mut line = String::new();
         loop {
-            let (len, _) = self.socket.recv_from(&mut buf).await?;
-            if let Ok(msg) = protocol::parse_server_message(&buf[..len])
+            line.clear();
+            let n = self.reader.read_line(&mut line).await?;
+            if n == 0 {
+                break;
+            }
+            if let Ok(msg) = protocol::parse_server_message(line.trim_end().as_bytes())
                 && tx.send(msg).await.is_err()
             {
                 break;
