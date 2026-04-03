@@ -36,19 +36,17 @@ impl Resources {
         context: C,
         load_fn: F,
     ) -> Result<HashMap<String, T>, ResourceError> {
-        let base_dir = if cfg!(debug_assertions) {
+        let base_dir = {
             let mut candidate = std::env::current_dir()?;
             loop {
                 if candidate.join(dir).exists() {
-                    break candidate;
+                    break Ok(candidate);
                 }
                 if !candidate.pop() {
-                    return Err(ResourceError::DirNotFound(dir.to_string()));
+                    break dirs::config_dir().ok_or(ResourceError::ConfigDirNotFound);
                 }
             }
-        } else {
-            dirs::config_dir().ok_or(ResourceError::ConfigDirNotFound)?
-        };
+        }?;
 
         base_dir
             .join(dir)
