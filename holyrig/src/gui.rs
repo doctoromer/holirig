@@ -190,6 +190,7 @@ struct AppTabViewer<'a> {
     sender: Sender<ManagerCommand>,
     error_message: Option<String>,
     active_tab_id: Option<TabId>,
+    tab_count: usize,
     pending_creates: &'a mut Vec<(TabId, oneshot::Receiver<RigId>)>,
 }
 
@@ -199,6 +200,7 @@ impl<'a> AppTabViewer<'a> {
         rig_types: Vec<String>,
         available_ports: Vec<SerialPortEntry>,
         active_tab_id: Option<TabId>,
+        tab_count: usize,
         pending_creates: &'a mut Vec<(TabId, oneshot::Receiver<RigId>)>,
     ) -> Self {
         AppTabViewer {
@@ -209,6 +211,7 @@ impl<'a> AppTabViewer<'a> {
             sender,
             error_message: None,
             active_tab_id,
+            tab_count,
             pending_creates,
         }
     }
@@ -399,7 +402,7 @@ impl<'a> TabViewer for AppTabViewer<'a> {
     }
 
     fn is_closeable(&self, tab: &Self::Tab) -> bool {
-        Some(tab.tab_id) == self.active_tab_id
+        self.tab_count > 1 && Some(tab.tab_id) == self.active_tab_id
     }
 
     fn on_close(&mut self, tab: &mut Self::Tab) -> OnCloseResponse {
@@ -521,11 +524,14 @@ impl AppTabs {
                     .map(|(_, node)| node.tabs[0].tab_id)
             });
 
+        let tab_count = self.dock_state.iter_all_tabs().count();
+
         let mut tab_viewer = AppTabViewer::new(
             self.sender.clone(),
             self.rig_types.clone(),
             self.available_ports.clone(),
             active_tab_id,
+            tab_count,
             &mut self.pending_creates,
         );
 
