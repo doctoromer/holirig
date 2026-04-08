@@ -7,11 +7,18 @@ use windows::Win32::Foundation::{CLASS_E_NOAGGREGATION, E_NOINTERFACE};
 use windows::Win32::System::Com::{
     IClassFactory, IClassFactory_Impl, IDispatch, IDispatch_Impl, IDispatch_Vtbl,
 };
+use windows::Win32::System::Com::{
+    IConnectionPoint, IConnectionPointContainer, IConnectionPointContainer_Impl,
+    IEnumConnectionPoints,
+};
 use windows::core::{GUID, IUnknown, Interface, implement};
 use windows_core::{BOOL, HRESULT, interface};
 
 use tracing::{debug, trace};
 
+use crate::connection_point::{
+    EventSinks, OMNIRIG_EVENTS_IID, OmniRigEventsConnectionPoint, connect_e_noconnection,
+};
 use crate::provider::OmniRigProvider;
 use crate::rig::{IRigX, RigX};
 use auto_dispatch::auto_dispatch;
@@ -26,22 +33,39 @@ pub unsafe trait IOmniRigX: IDispatch {
     pub fn set_DialogVisible(&self, Value: bool) -> HRESULT;
 }
 
-#[implement(IOmniRigX)]
+#[implement(IOmniRigX, IConnectionPointContainer)]
 pub struct OmniRigX {
     dialog_visible: RwLock<bool>,
     rig1: RwLock<Option<IRigX>>,
     rig2: RwLock<Option<IRigX>>,
+    connection_point: IConnectionPoint,
 }
 
 impl OmniRigX {
-    pub fn from_provider(provider: &dyn OmniRigProvider) -> Self {
+    pub fn from_provider(provider: &dyn OmniRigProvider, event_sinks: Arc<EventSinks>) -> Self {
         let rig1: IRigX = RigX::new(provider.create_rig1()).into();
         let rig2: IRigX = RigX::new(provider.create_rig2()).into();
+        let cp: IConnectionPoint = OmniRigEventsConnectionPoint { sinks: event_sinks }.into();
 
         Self {
             dialog_visible: RwLock::new(false),
             rig1: RwLock::new(Some(rig1)),
             rig2: RwLock::new(Some(rig2)),
+            connection_point: cp,
+        }
+    }
+}
+
+impl IConnectionPointContainer_Impl for OmniRigX_Impl {
+    fn EnumConnectionPoints(&self) -> windows::core::Result<IEnumConnectionPoints> {
+        Err(windows::Win32::Foundation::E_NOTIMPL.into())
+    }
+
+    fn FindConnectionPoint(&self, riid: *const GUID) -> windows::core::Result<IConnectionPoint> {
+        if unsafe { *riid } == OMNIRIG_EVENTS_IID {
+            Ok(self.connection_point.clone())
+        } else {
+            Err(connect_e_noconnection())
         }
     }
 }
@@ -171,13 +195,19 @@ impl IClassFactory_Impl for OmniRigXFactory_Impl {
         unsafe {
             let requested_iid = *riid;
 
-            if requested_iid != IUnknown::IID && requested_iid != IDispatch::IID {
+            if requested_iid != IUnknown::IID
+                && requested_iid != IDispatch::IID
+                && requested_iid != IConnectionPointContainer::IID
+            {
                 *ppvobject = std::ptr::null_mut();
                 return Err(E_NOINTERFACE.into());
             }
 
             debug!("OmniRigXFactory: Creating new OmniRigX instance");
-            let instance: IOmniRigX = OmniRigX::from_provider(self.provider.as_ref()).into();
+            let event_sinks = EventSinks::new();
+            self.provider.register_event_sinks(Arc::clone(&event_sinks));
+            let instance: IOmniRigX =
+                OmniRigX::from_provider(self.provider.as_ref(), event_sinks).into();
             *ppvobject = std::mem::transmute_copy(&instance);
             std::mem::forget(instance);
         }

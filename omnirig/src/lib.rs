@@ -12,6 +12,7 @@ use windows::core::GUID;
 
 use crate::omnirig::OmniRigXFactory;
 
+pub mod connection_point;
 mod enums;
 pub mod omnirig;
 mod port_bits;
@@ -19,6 +20,7 @@ pub mod provider;
 mod registry;
 pub mod rig;
 
+pub use connection_point::EventSinks;
 pub use enums::{RigParamX, RigStatusX};
 pub use provider::{
     DummyPortBits, DummyProvider, DummyRig, OmniRigProvider, PortBitsControl, RigControl,
