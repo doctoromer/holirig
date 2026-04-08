@@ -1,20 +1,28 @@
 #![allow(non_snake_case)]
 
+use std::fmt;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use windows::Win32::Foundation::{DISP_E_MEMBERNOTFOUND, E_NOTIMPL};
 use windows::Win32::System::Com::{
     CLSCTX_LOCAL_SERVER, CLSIDFromProgID, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
-    CoUninitialize, DISPATCH_PROPERTYGET, DISPPARAMS, IDispatch,
+    CoUninitialize, DISPATCH_FLAGS, DISPATCH_PROPERTYGET, DISPPARAMS, EXCEPINFO, IConnectionPoint,
+    IConnectionPointContainer, IDispatch, IDispatch_Impl, ITypeInfo,
 };
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, REG_SAM_FLAGS, REG_SZ,
     RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
 };
 use windows::Win32::System::Variant::VARIANT;
-use windows::core::Interface;
+use windows::core::{GUID, Interface, implement};
 use windows_core::{BSTR, PCWSTR};
 
 use omnirig::omnirig::IOmniRigX;
 use omnirig::rig::IRigX;
 use omnirig::{CLSID_OMNIRIG, PROG_ID};
+
+const IID_OMNIRIG_X_EVENTS: GUID = GUID::from_u128(0x2219175F_E561_47E7_AD17_73C4D8891AA1);
 
 fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -137,8 +145,11 @@ fn check_registry(extra_access: REG_SAM_FLAGS, view_name: &str) {
 
 fn run_com_tests(verbose: bool) {
     unsafe {
-        if let Err(e) = CoInitializeEx(None, COINIT_MULTITHREADED).ok() {
-            fail("COM initialization", &format!("CoInitializeEx failed: {e}"));
+        if let Err(err) = CoInitializeEx(None, COINIT_MULTITHREADED).ok() {
+            fail(
+                "COM initialization",
+                &format!("CoInitializeEx failed: {err}"),
+            );
             return;
         }
     }
@@ -152,13 +163,13 @@ fn run_com_tests(verbose: bool) {
             pass("CoCreateInstance with CLSID");
             obj
         }
-        Err(e) => {
+        Err(err) => {
             fail(
                 "CoCreateInstance with CLSID",
                 &format!(
                     "HRESULT 0x{:08X} ({})",
-                    e.code().0 as u32,
-                    hresult_name(e.code().0)
+                    err.code().0 as u32,
+                    hresult_name(err.code().0)
                 ),
             );
             unsafe {
@@ -177,13 +188,13 @@ fn run_com_tests(verbose: bool) {
                 &format!("Resolved to {{{:?}}}", clsid),
             );
         }
-        Err(e) => {
+        Err(err) => {
             fail(
                 &format!("CLSIDFromProgID(\"{PROG_ID}\")"),
                 &format!(
                     "HRESULT 0x{:08X} ({})",
-                    e.code().0 as u32,
-                    hresult_name(e.code().0)
+                    err.code().0 as u32,
+                    hresult_name(err.code().0)
                 ),
             );
         }
@@ -204,6 +215,15 @@ fn run_com_tests(verbose: bool) {
         None => fail("QueryInterface for IDispatch", "E_NOINTERFACE"),
     }
 
+    let connection_point_container: Option<IConnectionPointContainer> = unknown.cast().ok();
+    match &connection_point_container {
+        Some(_) => pass("QueryInterface for IConnectionPointContainer"),
+        None => fail(
+            "QueryInterface for IConnectionPointContainer",
+            "E_NOINTERFACE",
+        ),
+    }
+
     println!();
 
     if let Some(ref omnirig) = omnirig {
@@ -213,6 +233,11 @@ fn run_com_tests(verbose: bool) {
     if let Some(ref dispatch) = dispatch {
         println!();
         run_dispatch_tests(dispatch);
+    }
+
+    if let Some(ref container) = connection_point_container {
+        println!();
+        run_event_tests(container);
     }
 
     unsafe {
@@ -352,7 +377,12 @@ fn dispatch_get_i32(dispatch: &IDispatch, name: &str) -> Result<i32, String> {
                 0x0400, // LOCALE_USER_DEFAULT
                 &mut dispid,
             )
-            .map_err(|e| format!("GetIDsOfNames failed: HRESULT 0x{:08X}", e.code().0 as u32))?;
+            .map_err(|err| {
+                format!(
+                    "GetIDsOfNames failed: HRESULT 0x{:08X}",
+                    err.code().0 as u32
+                )
+            })?;
 
         let mut result = VARIANT::default();
         let mut exc_info = std::mem::zeroed();
@@ -370,10 +400,10 @@ fn dispatch_get_i32(dispatch: &IDispatch, name: &str) -> Result<i32, String> {
                 Some(&mut exc_info),
                 Some(&mut arg_err),
             )
-            .map_err(|e| format!("Invoke failed: HRESULT 0x{:08X}", e.code().0 as u32))?;
+            .map_err(|err| format!("Invoke failed: HRESULT 0x{:08X}", err.code().0 as u32))?;
 
         let val = windows::Win32::System::Variant::VariantToInt32(&result)
-            .map_err(|e| format!("VariantToInt32 failed: {e}"))?;
+            .map_err(|err| format!("VariantToInt32 failed: {err}"))?;
         Ok(val)
     }
 }
@@ -383,12 +413,235 @@ fn run_dispatch_tests(dispatch: &IDispatch) {
 
     match dispatch_get_i32(dispatch, "InterfaceVersion") {
         Ok(value) => pass(&format!("IDispatch InterfaceVersion = {value}")),
-        Err(e) => fail("IDispatch InterfaceVersion", &e),
+        Err(err) => fail("IDispatch InterfaceVersion", &err),
     }
 
     match dispatch_get_i32(dispatch, "SoftwareVersion") {
         Ok(value) => pass(&format!("IDispatch SoftwareVersion = {value}")),
-        Err(e) => fail("IDispatch SoftwareVersion", &e),
+        Err(err) => fail("IDispatch SoftwareVersion", &err),
+    }
+}
+
+#[derive(Debug, Clone)]
+enum EventRecord {
+    VisibleChange,
+    RigTypeChange { rig_number: i32 },
+    StatusChange { rig_number: i32 },
+    ParamsChange { rig_number: i32, params: i32 },
+    CustomReply { rig_number: i32 },
+    Unknown { dispid: i32, n_args: u32 },
+}
+
+#[implement(IDispatch)]
+struct EventSink {
+    events: Arc<Mutex<Vec<EventRecord>>>,
+}
+
+impl IDispatch_Impl for EventSink_Impl {
+    fn GetTypeInfoCount(&self) -> windows::core::Result<u32> {
+        Ok(0)
+    }
+
+    fn GetTypeInfo(&self, _itinfo: u32, _lcid: u32) -> windows::core::Result<ITypeInfo> {
+        Err(E_NOTIMPL.into())
+    }
+
+    fn GetIDsOfNames(
+        &self,
+        _riid: *const GUID,
+        _rgsznames: *const PCWSTR,
+        _cnames: u32,
+        _lcid: u32,
+        _rgdispid: *mut i32,
+    ) -> windows::core::Result<()> {
+        Err(DISP_E_MEMBERNOTFOUND.into())
+    }
+
+    fn Invoke(
+        &self,
+        dispidmember: i32,
+        _riid: *const GUID,
+        _lcid: u32,
+        _wflags: DISPATCH_FLAGS,
+        pdispparams: *const DISPPARAMS,
+        _pvarresult: *mut VARIANT,
+        _pexcepinfo: *mut EXCEPINFO,
+        _puargerr: *mut u32,
+    ) -> windows::core::Result<()> {
+        let record = unsafe { decode_event(dispidmember, pdispparams) };
+        self.events.lock().unwrap().push(record);
+        Ok(())
+    }
+}
+
+/// Decode an event invocation into an `EventRecord`. DISPPARAMS arguments are stored in
+/// reverse order: the last formal parameter is at index 0.
+unsafe fn decode_event(dispid: i32, pdispparams: *const DISPPARAMS) -> EventRecord {
+    let n_args = if pdispparams.is_null() {
+        0
+    } else {
+        unsafe { (*pdispparams).cArgs }
+    };
+
+    let read_arg = |reverse_index: u32| -> Option<i32> {
+        if pdispparams.is_null() {
+            return None;
+        }
+        let params = unsafe { &*pdispparams };
+        if params.rgvarg.is_null() || reverse_index >= params.cArgs {
+            return None;
+        }
+        let variant = unsafe { &*params.rgvarg.add(reverse_index as usize) };
+        unsafe { windows::Win32::System::Variant::VariantToInt32(variant).ok() }
+    };
+
+    match dispid {
+        0x01 => EventRecord::VisibleChange,
+        0x02 => EventRecord::RigTypeChange {
+            rig_number: read_arg(0).unwrap_or(-1),
+        },
+        0x03 => EventRecord::StatusChange {
+            rig_number: read_arg(0).unwrap_or(-1),
+        },
+        0x04 => EventRecord::ParamsChange {
+            rig_number: read_arg(1).unwrap_or(-1),
+            params: read_arg(0).unwrap_or(0),
+        },
+        0x05 => EventRecord::CustomReply {
+            rig_number: read_arg(2).unwrap_or(-1),
+        },
+        other => EventRecord::Unknown {
+            dispid: other,
+            n_args,
+        },
+    }
+}
+
+impl fmt::Display for EventRecord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EventRecord::VisibleChange => write!(f, "VisibleChange()"),
+            EventRecord::RigTypeChange { rig_number } => {
+                write!(f, "RigTypeChange(rig={rig_number})")
+            }
+            EventRecord::StatusChange { rig_number } => {
+                write!(f, "StatusChange(rig={rig_number})")
+            }
+            EventRecord::ParamsChange { rig_number, params } => write!(
+                f,
+                "ParamsChange(rig={rig_number}, params=0x{:08X})",
+                *params as u32
+            ),
+            EventRecord::CustomReply { rig_number } => {
+                write!(f, "CustomReply(rig={rig_number})")
+            }
+            EventRecord::Unknown { dispid, n_args } => {
+                write!(f, "Unknown(dispid=0x{dispid:02X}, args={n_args})")
+            }
+        }
+    }
+}
+
+fn run_event_tests(container: &IConnectionPointContainer) {
+    println!("--- IOmniRigXEvents tests ---");
+
+    let connection_point: IConnectionPoint = unsafe {
+        match container.FindConnectionPoint(&IID_OMNIRIG_X_EVENTS) {
+            Ok(connection_point) => {
+                pass("IConnectionPointContainer.FindConnectionPoint(IOmniRigXEvents)");
+                connection_point
+            }
+            Err(err) => {
+                fail(
+                    "IConnectionPointContainer.FindConnectionPoint(IOmniRigXEvents)",
+                    &format!("HRESULT 0x{:08X}", err.code().0 as u32),
+                );
+                return;
+            }
+        }
+    };
+
+    unsafe {
+        match connection_point.GetConnectionInterface() {
+            Ok(iid) if iid == IID_OMNIRIG_X_EVENTS => {
+                pass("IConnectionPoint.GetConnectionInterface() = IOmniRigXEvents");
+            }
+            Ok(iid) => {
+                fail(
+                    "IConnectionPoint.GetConnectionInterface()",
+                    &format!("Returned unexpected IID: {iid:?}"),
+                );
+            }
+            Err(err) => {
+                warn(
+                    "IConnectionPoint.GetConnectionInterface()",
+                    &format!("HRESULT 0x{:08X}", err.code().0 as u32),
+                );
+            }
+        }
+    }
+
+    let events: Arc<Mutex<Vec<EventRecord>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = EventSink {
+        events: Arc::clone(&events),
+    };
+    let sink_dispatch: IDispatch = sink.into();
+    let sink_unknown: windows::core::IUnknown = sink_dispatch.cast().unwrap();
+
+    let cookie = unsafe {
+        match connection_point.Advise(&sink_unknown) {
+            Ok(c) => {
+                pass_detail(
+                    "IConnectionPoint.Advise(eventSink)",
+                    &format!("cookie = {c}"),
+                );
+                c
+            }
+            Err(err) => {
+                fail(
+                    "IConnectionPoint.Advise(eventSink)",
+                    &format!("HRESULT 0x{:08X}", err.code().0 as u32),
+                );
+                return;
+            }
+        }
+    };
+
+    let listen_window = Duration::from_secs(2);
+    println!(
+        "       Listening for events for {} seconds...",
+        listen_window.as_secs()
+    );
+
+    // We're MTA, so the OmniRig server can call our sink directly on its worker
+    // thread without marshaling. No message pump is needed — just wait.
+    std::thread::sleep(listen_window);
+
+    let captured = events.lock().unwrap().clone();
+    if captured.is_empty() {
+        warn(
+            "Event delivery",
+            "No events received during listening window (this may be normal if no rig state changed)",
+        );
+    } else {
+        pass_detail(
+            &format!("Event delivery: received {} event(s)", captured.len()),
+            &captured
+                .iter()
+                .map(EventRecord::to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
+
+    unsafe {
+        match connection_point.Unadvise(cookie) {
+            Ok(()) => pass("IConnectionPoint.Unadvise()"),
+            Err(err) => fail(
+                "IConnectionPoint.Unadvise()",
+                &format!("HRESULT 0x{:08X}", err.code().0 as u32),
+            ),
+        }
     }
 }
 

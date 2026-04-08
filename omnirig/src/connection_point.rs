@@ -13,7 +13,6 @@ use windows::Win32::System::Ole::CONNECT_E_NOCONNECTION;
 use windows::Win32::System::Variant::VARIANT;
 use windows::core::{GUID, IUnknown, Interface, Ref, implement};
 
-/// GUID for the IOmniRigXEvents dispinterface
 pub const OMNIRIG_EVENTS_IID: GUID = GUID::from_u128(0x2219175F_E561_47E7_AD17_73C4D8891AA1);
 
 const DISPATCH_METHOD: DISPATCH_FLAGS = DISPATCH_FLAGS(1);
