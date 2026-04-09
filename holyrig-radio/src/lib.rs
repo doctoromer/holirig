@@ -216,7 +216,7 @@ fn command_to_params(cmd: RadioCommand) -> Option<(String, HashMap<String, Value
                 .into_iter()
                 .collect(),
         ),
-        _clear_rit => ("clear_rit", HashMap::new()),
+        RadioCommand::ClearRit => ("clear_rit", HashMap::new()),
     };
     Some((name.into(), params))
 }

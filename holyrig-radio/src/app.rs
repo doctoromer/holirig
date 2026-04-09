@@ -386,8 +386,18 @@ fn draw_vfo_controls(ui: &mut Ui, tab: &mut RigTab, state: &RadioState) {
             if ui.button(RichText::new(ptt_str).color(ptt_col)).clicked() {
                 tab.send(RadioCommand::Transmit(!state.transmitting));
             }
-            if state.split {
-                ui.label(RichText::new("SPLIT").color(AMBER).size(11.0));
+            if state.has_status("split") {
+                let (split_str, split_col) = if state.split {
+                    ("SPLIT [ON] ", AMBER)
+                } else {
+                    ("SPLIT [OFF]", Color32::GRAY)
+                };
+                if ui
+                    .button(RichText::new(split_str).color(split_col))
+                    .clicked()
+                {
+                    tab.send(RadioCommand::SetSplit(!state.split));
+                }
             }
         });
     });
@@ -443,6 +453,9 @@ fn draw_rit_xit(ui: &mut Ui, tab: &mut RigTab, state: &RadioState) {
             }
             if ui.small_button("−10").clicked() {
                 tab.send(RadioCommand::RitOffset(offset - 10));
+            }
+            if ui.small_button("Clear").clicked() {
+                tab.send(RadioCommand::ClearRit);
             }
         }
     });
