@@ -7,13 +7,12 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use holyrig_client::capabilities::parse_capabilities;
-use holyrig_client::net::TcpClient;
-use holyrig_client::protocol::{self, ServerMessage};
+use holyrig_client::client::HolyrigClient;
+use holyrig_client::protocol::{ParsedNotification, ServerMessage};
 
 use app::{AppMessage, RadioApp};
 use commands::RadioCommand;
@@ -56,61 +55,22 @@ async fn connect_and_run(
     addr: SocketAddr,
     app_tx: std::sync::mpsc::Sender<AppMessage>,
 ) -> Result<()> {
-    let mut client = TcpClient::connect(addr).await?;
-
-    let rigs_value = match client.send_and_wait(&protocol::list_rigs_request()).await {
-        Ok(resp) => resp.result.unwrap_or(Value::Null),
-        Err(e) => bail!("list_rigs failed: {e}"),
-    };
-
-    let rig_ids: Vec<usize> = match &rigs_value {
-        Value::Object(map) => map.keys().filter_map(|k| k.parse().ok()).collect(),
-        _ => bail!("Unexpected response from list_rigs"),
-    };
-
-    if rig_ids.is_empty() {
-        bail!("Server has no rigs configured");
-    }
+    let (msg_tx, mut msg_rx) = mpsc::channel::<ServerMessage>(64);
+    let client = HolyrigClient::connect(addr, msg_tx).await?;
 
     let (global_cmd_tx, mut global_cmd_rx) = mpsc::unbounded_channel::<(usize, RadioCommand)>();
-
     let mut rig_states: HashMap<usize, Arc<Mutex<RadioState>>> = HashMap::new();
 
-    for &rig_id in &rig_ids {
-        let caps = match client
-            .send_and_wait(&protocol::get_capabilities_request(rig_id))
-            .await
-        {
-            Ok(resp) => resp
-                .result
-                .map(|v| parse_capabilities(&v))
-                .unwrap_or_default(),
-            Err(e) => bail!("get_capabilities failed for rig {rig_id}: {e}"),
-        };
-
-        let fields: Vec<String> = caps.status_fields.keys().cloned().collect();
-        if !fields.is_empty() {
-            let _ = client
-                .send_and_wait(&protocol::subscribe_status_request(rig_id, fields))
-                .await;
-        }
-
-        let mut initial = RadioState::new(rig_id, caps);
-        initial.connected = true;
-
-        if let Ok(resp) = client
-            .send_and_wait(&protocol::get_status_request(rig_id))
-            .await
-            && let Some(Value::Object(map)) = resp.result
-        {
-            initial.apply_updates(map.into_iter().collect());
-        }
+    for info in client.rigs.values() {
+        let mut initial = RadioState::new(info.id, info.capabilities.clone());
+        initial.connected = info.connected;
+        initial.apply_updates(info.status.clone());
 
         let state = Arc::new(Mutex::new(initial));
-        rig_states.insert(rig_id, state.clone());
+        rig_states.insert(info.id, state.clone());
 
         let _ = app_tx.send(AppMessage::AddRig {
-            rig_id,
+            rig_id: info.id,
             state,
             cmd_tx: global_cmd_tx.clone(),
         });
@@ -118,38 +78,23 @@ async fn connect_and_run(
 
     let _ = app_tx.send(AppMessage::Connected);
 
-    let (mut tcp_sender, tcp_receiver) = client.into_split();
-
     let states_rx = rig_states.clone();
     let app_tx_rx = app_tx.clone();
-    let (msg_tx, mut msg_rx) = mpsc::channel::<ServerMessage>(64);
-    tokio::spawn(async move {
-        let _ = tcp_receiver.run(msg_tx).await;
-    });
     tokio::spawn(async move {
         while let Some(msg) = msg_rx.recv().await {
             if let ServerMessage::Notification(notif) = msg {
-                let rid = notif.params.get("rig_id").and_then(|v| v.as_u64());
-                match (notif.method.as_str(), rid) {
-                    ("status_update", Some(rid)) => {
-                        if let Some(s) = states_rx.get(&(rid as usize))
-                            && let Some(obj) =
-                                notif.params.get("updates").and_then(|v| v.as_object())
-                        {
-                            let updates: HashMap<String, Value> =
-                                obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                match notif.parse() {
+                    ParsedNotification::StatusUpdate { rig_id, updates } => {
+                        if let Some(s) = states_rx.get(&rig_id) {
                             s.lock().unwrap().apply_updates(updates);
                         }
                     }
-                    ("connection_update", Some(rid)) => {
-                        if let Some(s) = states_rx.get(&(rid as usize))
-                            && let Some(connected) =
-                                notif.params.get("connected").and_then(|v| v.as_bool())
-                        {
+                    ParsedNotification::ConnectionUpdate { rig_id, connected } => {
+                        if let Some(s) = states_rx.get(&rig_id) {
                             s.lock().unwrap().connected = connected;
                         }
                     }
-                    _ => {}
+                    ParsedNotification::Unknown => {}
                 }
             }
         }
@@ -157,10 +102,10 @@ async fn connect_and_run(
     });
 
     tokio::spawn(async move {
+        let mut client = client;
         while let Some((rig_id, cmd)) = global_cmd_rx.recv().await {
             if let Some((name, params)) = command_to_params(cmd) {
-                let req = protocol::execute_command_request(rig_id, name, params);
-                let _ = tcp_sender.send_request(&req).await;
+                let _ = client.execute_command(rig_id, name, params).await;
             }
         }
     });

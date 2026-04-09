@@ -1,14 +1,7 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-
-static NEXT_ID: AtomicI64 = AtomicI64::new(1);
-
-fn next_id() -> Id {
-    Id::Number(NEXT_ID.fetch_add(1, Ordering::Relaxed))
-}
+use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(untagged)]
@@ -43,62 +36,48 @@ pub struct Notification {
     pub params: Value,
 }
 
-pub fn list_rigs_request() -> Request {
-    Request {
-        jsonrpc: "2.0".into(),
-        method: "list_rigs".into(),
-        params: None,
-        id: next_id(),
-    }
-}
-
-pub fn get_capabilities_request(rig_id: usize) -> Request {
-    Request {
-        jsonrpc: "2.0".into(),
-        method: "get_capabilities".into(),
-        params: Some(json!({"rig_id": rig_id})),
-        id: next_id(),
-    }
-}
-
-pub fn subscribe_status_request(rig_id: usize, fields: Vec<String>) -> Request {
-    Request {
-        jsonrpc: "2.0".into(),
-        method: "subscribe_status".into(),
-        params: Some(json!({"rig_id": rig_id, "fields": fields})),
-        id: next_id(),
-    }
-}
-
-pub fn get_status_request(rig_id: usize) -> Request {
-    Request {
-        jsonrpc: "2.0".into(),
-        method: "get_status".into(),
-        params: Some(json!({"rig_id": rig_id})),
-        id: next_id(),
-    }
-}
-
-pub fn execute_command_request(
-    rig_id: usize,
-    command: String,
-    parameters: HashMap<String, Value>,
-) -> Request {
-    Request {
-        jsonrpc: "2.0".into(),
-        method: "execute_command".into(),
-        params: Some(json!({
-            "rig_id": rig_id,
-            "command": command,
-            "parameters": parameters,
-        })),
-        id: next_id(),
-    }
-}
-
 pub enum ServerMessage {
     Response(Response),
     Notification(Notification),
+}
+
+pub enum ParsedNotification {
+    StatusUpdate {
+        rig_id: usize,
+        updates: HashMap<String, Value>,
+    },
+    ConnectionUpdate {
+        rig_id: usize,
+        connected: bool,
+    },
+    Unknown,
+}
+
+impl Notification {
+    pub fn parse(self) -> ParsedNotification {
+        let rig_id = self
+            .params
+            .get("rig_id")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+
+        match (self.method.as_str(), rig_id) {
+            ("status_update", Some(rig_id)) => {
+                if let Some(obj) = self.params.get("updates").and_then(|v| v.as_object()) {
+                    let updates = obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    return ParsedNotification::StatusUpdate { rig_id, updates };
+                }
+                ParsedNotification::Unknown
+            }
+            ("connection_update", Some(rig_id)) => {
+                if let Some(connected) = self.params.get("connected").and_then(|v| v.as_bool()) {
+                    return ParsedNotification::ConnectionUpdate { rig_id, connected };
+                }
+                ParsedNotification::Unknown
+            }
+            _ => ParsedNotification::Unknown,
+        }
+    }
 }
 
 pub fn parse_server_message(data: &[u8]) -> anyhow::Result<ServerMessage> {

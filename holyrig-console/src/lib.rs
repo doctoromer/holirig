@@ -3,15 +3,10 @@ mod commands;
 mod input;
 mod ui;
 
-use holyrig_client::capabilities::parse_capabilities;
-use holyrig_client::net;
-use holyrig_client::protocol;
-
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use crossterm::event::{self, Event};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -22,62 +17,23 @@ use ratatui::backend::CrosstermBackend;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
+use holyrig_client::client::HolyrigClient;
+use holyrig_client::protocol::{ParsedNotification, ServerMessage};
+
 use app::App;
 use commands::Command;
 use input::InputAction;
-use net::TcpClient;
-use protocol::ServerMessage;
 
 pub async fn run(addr: SocketAddr) -> Result<()> {
-    let mut client = TcpClient::connect(addr).await?;
-    let mut app = App::new();
-
-    let list_req = protocol::list_rigs_request();
-    let resp = client.send_and_wait(&list_req).await;
-    let rigs_value = match resp {
-        Ok(resp) => resp.result.unwrap_or(Value::Null),
-        Err(e) => bail!("Cannot reach server at {addr}: {e}"),
-    };
-
-    if let Value::Object(rigs) = &rigs_value {
-        for (id_str, connected) in rigs {
-            let rig_id: usize = id_str.parse().unwrap_or(0);
-            app.add_rig(rig_id, connected.as_bool().unwrap_or(false));
-        }
-    }
-
-    for i in 0..app.rigs.len() {
-        let rig_id = app.rigs[i].rig_id;
-        let caps_request = protocol::get_capabilities_request(rig_id);
-        if let Ok(response) = client.send_and_wait(&caps_request).await
-            && let Some(result) = response.result
-        {
-            let caps = parse_capabilities(&result);
-            let fields: Vec<String> = caps.status_fields.keys().cloned().collect();
-
-            if !fields.is_empty() {
-                let request = protocol::subscribe_status_request(rig_id, fields);
-                let _ = client.send_and_wait(&request).await;
-            }
-
-            app.set_capabilities(rig_id, caps);
-
-            let status_request = protocol::get_status_request(rig_id);
-            if let Ok(response) = client.send_and_wait(&status_request).await
-                && let Some(Value::Object(values)) = response.result
-            {
-                let updates: HashMap<String, Value> = values.into_iter().collect();
-                app.update_status(rig_id, updates);
-            }
-        }
-    }
-
-    let (mut sender, receiver) = client.into_split();
     let (msg_tx, mut msg_rx) = mpsc::channel::<ServerMessage>(64);
+    let mut client = HolyrigClient::connect(addr, msg_tx).await?;
 
-    tokio::spawn(async move {
-        let _ = receiver.run(msg_tx).await;
-    });
+    let mut app = App::new();
+    for info in client.rigs.values() {
+        app.add_rig(info.id, info.connected);
+        app.set_capabilities(info.id, info.capabilities.clone());
+        app.update_status(info.id, info.status.clone());
+    }
 
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -85,7 +41,7 @@ pub async fn run(addr: SocketAddr) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_loop(&mut terminal, &mut app, &mut sender, &mut msg_rx).await;
+    let result = run_loop(&mut terminal, &mut app, &mut client, &mut msg_rx).await;
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -97,7 +53,7 @@ pub async fn run(addr: SocketAddr) -> Result<()> {
 async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
-    sender: &mut net::TcpSender,
+    client: &mut HolyrigClient,
     msg_rx: &mut mpsc::Receiver<ServerMessage>,
 ) -> Result<()> {
     let tick_rate = Duration::from_millis(60);
@@ -114,7 +70,7 @@ async fn run_loop(
         {
             match input::handle_key_event(key, app) {
                 InputAction::Submit(input) => {
-                    handle_command(app, sender, &input).await;
+                    handle_command(app, client, &input).await;
                 }
                 InputAction::Quit => {
                     app.should_quit = true;
@@ -131,14 +87,14 @@ async fn run_loop(
     Ok(())
 }
 
-async fn handle_command(app: &mut App, sender: &mut net::TcpSender, input: &str) {
+async fn handle_command(app: &mut App, client: &mut HolyrigClient, input: &str) {
     match commands::parse_command(input, app) {
         Ok(Command::Help) => {
             app.push_response(commands::help_text());
         }
         Ok(Command::ListRigs) => {
-            let request = protocol::list_rigs_request();
-            send_and_display(app, sender, &request).await;
+            let request = client.list_rigs_request();
+            send_and_display(app, client, &request).await;
         }
         Ok(Command::Caps { rig_id }) => {
             if let Some(rig) = app.rigs.iter().find(|r| r.rig_id == rig_id) {
@@ -182,8 +138,8 @@ async fn handle_command(app: &mut App, sender: &mut net::TcpSender, input: &str)
             command,
             parameters,
         }) => {
-            let request = protocol::execute_command_request(rig_id, command, parameters);
-            send_and_display(app, sender, &request).await;
+            let request = client.execute_command_request(rig_id, command, parameters);
+            send_and_display(app, client, &request).await;
         }
         Err(e) => {
             app.push_error(e.to_string());
@@ -191,8 +147,12 @@ async fn handle_command(app: &mut App, sender: &mut net::TcpSender, input: &str)
     }
 }
 
-async fn send_and_display(app: &mut App, sender: &mut net::TcpSender, request: &protocol::Request) {
-    if let Err(e) = sender.send_request(request).await {
+async fn send_and_display(
+    app: &mut App,
+    client: &mut HolyrigClient,
+    request: &holyrig_client::protocol::Request,
+) {
+    if let Err(e) = client.send_request(request).await {
         app.push_error(format!("Send failed: {e}"));
     }
 }
@@ -206,36 +166,15 @@ fn handle_server_message(app: &mut App, msg: ServerMessage) {
                 app.push_response(format_value(&result));
             }
         }
-        ServerMessage::Notification(notification) => {
-            let rig_id = notification.params.get("rig_id").and_then(|v| v.as_u64());
-            match (notification.method.as_str(), rig_id) {
-                ("status_update", Some(rig_id)) => {
-                    let rig_id = rig_id as usize;
-                    if let Some(updates) = notification
-                        .params
-                        .get("updates")
-                        .and_then(|v| v.as_object())
-                    {
-                        let updates: HashMap<String, Value> = updates
-                            .iter()
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect();
-                        app.update_status(rig_id, updates);
-                    }
-                }
-                ("connection_update", Some(rig_id)) => {
-                    let rig_id = rig_id as usize;
-                    if let Some(connected) = notification
-                        .params
-                        .get("connected")
-                        .and_then(|v| v.as_bool())
-                    {
-                        app.set_connected(rig_id, connected);
-                    }
-                }
-                _ => {}
+        ServerMessage::Notification(notif) => match notif.parse() {
+            ParsedNotification::StatusUpdate { rig_id, updates } => {
+                app.update_status(rig_id, updates);
             }
-        }
+            ParsedNotification::ConnectionUpdate { rig_id, connected } => {
+                app.set_connected(rig_id, connected);
+            }
+            ParsedNotification::Unknown => {}
+        },
     }
 }
 
