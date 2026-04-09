@@ -79,8 +79,7 @@ async fn connect_and_run(
     let _ = app_tx.send(AppMessage::Connected);
 
     let states_rx = rig_states.clone();
-    let app_tx_rx = app_tx.clone();
-    tokio::spawn(async move {
+    let recv_handle = tokio::spawn(async move {
         while let Some(msg) = msg_rx.recv().await {
             if let ServerMessage::Notification(notif) = msg {
                 match notif.parse() {
@@ -98,7 +97,6 @@ async fn connect_and_run(
                 }
             }
         }
-        let _ = app_tx_rx.send(AppMessage::Disconnected);
     });
 
     tokio::spawn(async move {
@@ -109,6 +107,9 @@ async fn connect_and_run(
             }
         }
     });
+
+    let _ = recv_handle.await;
+    let _ = app_tx.send(AppMessage::Disconnected);
 
     Ok(())
 }
