@@ -297,7 +297,7 @@ async fn send_notification_if_relevant(
     let Some(rig_id) = notification
         .params
         .get("rig_id")
-        .and_then(|v| v.as_str().and_then(|s| s.parse::<usize>().ok().map(RigId)))
+        .and_then(|v| v.as_u64().map(|n| RigId(n as usize)))
     else {
         return true;
     };
