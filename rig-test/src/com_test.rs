@@ -1,8 +1,10 @@
 #![allow(non_snake_case)]
 
 use std::fmt;
+use std::io;
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{DISP_E_MEMBERNOTFOUND, E_NOTIMPL};
 use windows::Win32::System::Com::{
@@ -607,32 +609,7 @@ fn run_event_tests(container: &IConnectionPointContainer) {
         }
     };
 
-    let listen_window = Duration::from_secs(2);
-    println!(
-        "       Listening for events for {} seconds...",
-        listen_window.as_secs()
-    );
-
-    // We're MTA, so the OmniRig server can call our sink directly on its worker
-    // thread without marshaling. No message pump is needed — just wait.
-    std::thread::sleep(listen_window);
-
-    let captured = events.lock().unwrap().clone();
-    if captured.is_empty() {
-        warn(
-            "Event delivery",
-            "No events received during listening window (this may be normal if no rig state changed)",
-        );
-    } else {
-        pass_detail(
-            &format!("Event delivery: received {} event(s)", captured.len()),
-            &captured
-                .iter()
-                .map(EventRecord::to_string)
-                .collect::<Vec<_>>()
-                .join(", "),
-        );
-    }
+    interactive_event_validation(&events);
 
     unsafe {
         match connection_point.Unadvise(cookie) {
@@ -642,6 +619,166 @@ fn run_event_tests(container: &IConnectionPointContainer) {
                 &format!("HRESULT 0x{:08X}", err.code().0 as u32),
             ),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StepOutcome {
+    Observed,
+    Skipped,
+    TimedOut,
+}
+
+fn mark_outcome(outcome: StepOutcome) -> &'static str {
+    match outcome {
+        StepOutcome::Observed => "[OK]  ",
+        StepOutcome::Skipped => "[SKIP]",
+        StepOutcome::TimedOut => "[MISS]",
+    }
+}
+
+fn spawn_skip_listener() -> Receiver<()> {
+    let (tx, rx) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        let stdin = io::stdin();
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match stdin.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if tx.send(()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    rx
+}
+
+fn run_event_step(
+    events: &Arc<Mutex<Vec<EventRecord>>>,
+    printed: &mut usize,
+    skip_rx: &Receiver<()>,
+    label: &str,
+    action: &str,
+    timeout: Duration,
+    predicate: impl Fn(&EventRecord) -> bool,
+) -> StepOutcome {
+    println!();
+    println!("Step: {label}");
+    println!("  Action: {action}");
+    println!(
+        "  Waiting for {label} (timeout {}s, press Enter to skip)...",
+        timeout.as_secs()
+    );
+
+    // Discard any Enter presses that arrived before this step started so they
+    // don't cause an immediate skip.
+    while skip_rx.try_recv().is_ok() {}
+
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        // Drain newly-arrived events under the lock, then release before I/O.
+        let new_events = {
+            let snapshot = events.lock().unwrap();
+            let new = snapshot[*printed..].to_vec();
+            *printed = snapshot.len();
+            new
+        };
+
+        for record in &new_events {
+            println!("       <- {record}");
+            if predicate(record) {
+                return StepOutcome::Observed;
+            }
+        }
+
+        if skip_rx.try_recv().is_ok() {
+            println!("       (skipped by user)");
+            return StepOutcome::Skipped;
+        }
+
+        if Instant::now() >= deadline {
+            println!("       (timed out)");
+            return StepOutcome::TimedOut;
+        }
+
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn interactive_event_validation(events: &Arc<Mutex<Vec<EventRecord>>>) {
+    println!();
+    println!("Interactive event validation");
+    println!("----------------------------");
+    println!("Each step prompts for one action in OmniRig and waits for the");
+    println!("corresponding event. Press Enter to skip a step you cannot perform.");
+
+    let skip_rx = spawn_skip_listener();
+    let step_timeout = Duration::from_secs(60);
+    let mut printed = 0usize;
+
+    let visible = run_event_step(
+        events,
+        &mut printed,
+        &skip_rx,
+        "VisibleChange",
+        "Open or close the OmniRig settings dialog",
+        step_timeout,
+        |record| matches!(record, EventRecord::VisibleChange),
+    );
+
+    let rig_type = run_event_step(
+        events,
+        &mut printed,
+        &skip_rx,
+        "RigTypeChange",
+        "Change the configured rig type for Rig1 or Rig2",
+        step_timeout,
+        |record| matches!(record, EventRecord::RigTypeChange { .. }),
+    );
+
+    let status = run_event_step(
+        events,
+        &mut printed,
+        &skip_rx,
+        "StatusChange",
+        "Connect or disconnect a rig (or toggle Disable in the settings dialog)",
+        step_timeout,
+        |record| matches!(record, EventRecord::StatusChange { .. }),
+    );
+
+    let params = run_event_step(
+        events,
+        &mut printed,
+        &skip_rx,
+        "ParamsChange",
+        "Change frequency / mode / VFO on a connected rig",
+        step_timeout,
+        |record| matches!(record, EventRecord::ParamsChange { .. }),
+    );
+
+    println!();
+    println!("Coverage:");
+    println!("  {} VisibleChange", mark_outcome(visible));
+    println!("  {} RigTypeChange", mark_outcome(rig_type));
+    println!("  {} StatusChange", mark_outcome(status));
+    println!("  {} ParamsChange", mark_outcome(params));
+
+    let all_observed = [visible, rig_type, status, params]
+        .iter()
+        .all(|outcome| *outcome == StepOutcome::Observed);
+    if all_observed {
+        pass("Interactive event coverage: all 4 expected events observed");
+    } else {
+        warn(
+            "Interactive event coverage",
+            "Some events were skipped or not observed (see table above)",
+        );
     }
 }
 
