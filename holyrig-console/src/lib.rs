@@ -1,9 +1,10 @@
 mod app;
 mod commands;
 mod input;
-mod net;
-mod protocol;
 mod ui;
+
+use holyrig_client::net;
+use holyrig_client::protocol;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
