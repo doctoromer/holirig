@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["auto-dispatch", "holyrig", "holyrig-client", "holyrig-console", "omnirig", "rig-test"]
+members = ["auto-dispatch", "holyrig", "holyrig-client", "holyrig-console", "holyrig-radio", "omnirig", "rig-test"]
 default-members = ["holyrig", "holyrig-console"]
 
 [workspace.dependencies]

@@ -2045,6 +2045,7 @@ dependencies = [
  "egui_dock",
  "gtk",
  "holyrig-console",
+ "holyrig-radio",
  "logos",
  "omnirig",
  "parking_lot",
@@ -2084,6 +2085,18 @@ dependencies = [
  "holyrig-client",
  "ratatui",
  "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "holyrig-radio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "eframe",
+ "egui",
+ "holyrig-client",
  "serde_json",
  "tokio",
 ]

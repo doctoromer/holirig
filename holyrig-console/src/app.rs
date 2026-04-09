@@ -2,21 +2,13 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+pub use holyrig_client::capabilities::Capabilities;
+
 pub struct RigState {
     pub rig_id: usize,
     pub connected: bool,
     pub status: HashMap<String, Value>,
     pub capabilities: Option<Capabilities>,
-}
-
-pub struct Capabilities {
-    pub commands: HashMap<String, Vec<CommandParam>>,
-    pub status_fields: HashMap<String, String>,
-}
-
-pub struct CommandParam {
-    pub name: String,
-    pub param_type: String,
 }
 
 pub struct ReplEntry {

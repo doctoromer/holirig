@@ -1,0 +1,12 @@
+[package]
+name = "holyrig-radio"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+holyrig-client = { path = "../holyrig-client" }
+eframe = "0.32.0"
+egui = "0.32.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
+serde_json = "1"
+anyhow = "1"

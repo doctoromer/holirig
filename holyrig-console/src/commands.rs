@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::app::{App, Capabilities};
+use holyrig_client::capabilities::Capabilities;
+
+use crate::app::App;
 
 pub enum Command {
     ListRigs,

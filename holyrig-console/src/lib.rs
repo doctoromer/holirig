@@ -3,6 +3,7 @@ mod commands;
 mod input;
 mod ui;
 
+use holyrig_client::capabilities::parse_capabilities;
 use holyrig_client::net;
 use holyrig_client::protocol;
 
@@ -21,7 +22,7 @@ use ratatui::backend::CrosstermBackend;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use app::{App, Capabilities, CommandParam};
+use app::App;
 use commands::Command;
 use input::InputAction;
 use net::TcpClient;
@@ -235,39 +236,6 @@ fn handle_server_message(app: &mut App, msg: ServerMessage) {
                 _ => {}
             }
         }
-    }
-}
-
-fn parse_capabilities(value: &Value) -> Capabilities {
-    let mut commands = HashMap::new();
-    if let Some(cmds) = value.get("commands").and_then(|v| v.as_object()) {
-        for (cmd_name, cmd_info) in cmds {
-            let mut params = Vec::new();
-            if let Some(parameters) = cmd_info.get("parameters").and_then(|v| v.as_object()) {
-                for (param_name, param_type) in parameters {
-                    params.push(CommandParam {
-                        name: param_name.clone(),
-                        param_type: param_type.as_str().unwrap_or("string").to_string(),
-                    });
-                }
-            }
-            commands.insert(cmd_name.clone(), params);
-        }
-    }
-
-    let mut status_fields = HashMap::new();
-    if let Some(fields) = value.get("status_fields").and_then(|v| v.as_object()) {
-        for (name, type_val) in fields {
-            status_fields.insert(
-                name.clone(),
-                type_val.as_str().unwrap_or("string").to_string(),
-            );
-        }
-    }
-
-    Capabilities {
-        commands,
-        status_fields,
     }
 }
 

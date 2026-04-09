@@ -33,6 +33,7 @@ struct Cli {
 #[argh(subcommand)]
 enum SubCommand {
     Console(ConsoleCommand),
+    Radio(RadioCommand),
 }
 
 /// Launch the interactive JSON-RPC console
@@ -42,6 +43,18 @@ struct ConsoleCommand {
     /// server address
     #[argh(option, default = "\"127.0.0.1:5973\".parse().unwrap()")]
     addr: std::net::SocketAddr,
+}
+
+/// Launch the radio front-panel GUI
+#[derive(FromArgs)]
+#[argh(subcommand, name = "radio")]
+struct RadioCommand {
+    /// server address
+    #[argh(option, default = "\"127.0.0.1:5973\".parse().unwrap()")]
+    addr: std::net::SocketAddr,
+    /// rig index to control (default: first connected rig)
+    #[argh(option)]
+    rig: Option<usize>,
 }
 
 fn init_tracing(
@@ -114,8 +127,10 @@ fn init_tracing(
 async fn main() -> Result<()> {
     let cli: Cli = argh::from_env();
 
-    if let Some(SubCommand::Console(cmd)) = cli.command {
-        return holyrig_console::run(cmd.addr).await;
+    match cli.command {
+        Some(SubCommand::Console(cmd)) => return holyrig_console::run(cmd.addr).await,
+        Some(SubCommand::Radio(cmd)) => return holyrig_radio::run(cmd.rig, cmd.addr).await,
+        None => {}
     }
 
     let _guards = init_tracing(cli.verbose);

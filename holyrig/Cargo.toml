@@ -21,6 +21,7 @@ anyhow = "1.0.97"
 crossbeam-channel = "0.5"
 argh = "0.1.12"
 holyrig-console = { path = "../holyrig-console" }
+holyrig-radio = { path = "../holyrig-radio" }
 dirs = "6.0"
 eframe = "0.32.0"
 egui = "0.32.0"
