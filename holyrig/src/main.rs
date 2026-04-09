@@ -124,13 +124,13 @@ fn init_tracing(
 async fn main() -> Result<()> {
     let cli: Cli = argh::from_env();
 
+    let _guards = init_tracing(cli.verbose);
+
     match cli.command {
         Some(SubCommand::Console(cmd)) => return holyrig_console::run(cmd.addr).await,
         Some(SubCommand::Radio(cmd)) => return holyrig_radio::run(cmd.addr).await,
         None => {}
     }
-
-    let _guards = init_tracing(cli.verbose);
 
     let resources = match Resources::load() {
         Ok(resources) => resources,
