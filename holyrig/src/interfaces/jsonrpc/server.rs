@@ -302,8 +302,18 @@ async fn send_notification_if_relevant(
         return true;
     };
 
-    if let Some(fields) = session.get_subscribed_fields(rig_id) {
-        // Filter updates to only requested fields
+    if notification.method == "connection_update" {
+        // Always send connection updates to all clients, regardless of subscription
+        match encode_message(notification) {
+            Ok(msg) => {
+                if writer.write_all(&msg).await.is_err() {
+                    return false;
+                }
+            }
+            Err(_) => return false,
+        }
+    } else if let Some(fields) = session.get_subscribed_fields(rig_id) {
+        // Filter status updates to only requested fields
         if let Some(updates) = notification
             .params
             .get("updates")
@@ -336,16 +346,6 @@ async fn send_notification_if_relevant(
                 }
                 Err(_) => return false,
             }
-        }
-    } else if notification.method == "connection_update" {
-        // Send connection updates to all clients
-        match encode_message(notification) {
-            Ok(msg) => {
-                if writer.write_all(&msg).await.is_err() {
-                    return false;
-                }
-            }
-            Err(_) => return false,
         }
     }
 
