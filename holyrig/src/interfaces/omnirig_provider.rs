@@ -185,98 +185,96 @@ impl HolyRigProvider {
                 match message_receiver.recv().await {
                     Ok(ManagerMessage::StatusUpdate { device_id, values }) => {
                         let slot = rig_ids_clone.iter().position(|id| *id == Some(device_id));
-                        if let Some(slot) = slot {
-                            if let Some(status) = statuses_clone.get(slot) {
-                                let params_bitmask = {
-                                    let mut s = status.write();
-                                    let old_freq_a = s.freq_a;
-                                    let old_freq_b = s.freq_b;
-                                    let old_mode = s.mode.clone();
-                                    let old_cw_pitch = s.cw_pitch;
-                                    let old_rit_offset = s.rit_offset;
-                                    let old_transmit = s.transmit;
-                                    let old_split = s.split;
-                                    let old_rit = s.rit;
-                                    let old_xit = s.xit;
-                                    let old_vfo = s.vfo.clone();
-                                    s.connected = true;
-                                    for (name, value) in &values {
-                                        match (name.as_str(), value) {
-                                            ("freq_a", Value::Integer(f)) => s.freq_a = *f as i32,
-                                            ("freq_b", Value::Integer(f)) => s.freq_b = *f as i32,
-                                            ("mode", Value::String(m)) => s.mode = m.clone(),
-                                            ("vfo", Value::String(v)) => s.vfo = v.clone(),
-                                            ("cw_pitch", Value::Integer(p)) => {
-                                                s.cw_pitch = *p as i32
-                                            }
-                                            ("transmit", Value::Boolean(t)) => s.transmit = *t,
-                                            ("split", Value::Boolean(sp)) => s.split = *sp,
-                                            ("rit", Value::Boolean(r)) => s.rit = *r,
-                                            ("xit", Value::Boolean(x)) => s.xit = *x,
-                                            ("rit_offset", Value::Integer(o)) => {
-                                                s.rit_offset = *o as i32
-                                            }
-                                            _ => {}
+                        if let Some(slot) = slot
+                            && let Some(status) = statuses_clone.get(slot)
+                        {
+                            let params_bitmask = {
+                                let mut s = status.write();
+                                let old_freq_a = s.freq_a;
+                                let old_freq_b = s.freq_b;
+                                let old_mode = s.mode.clone();
+                                let old_cw_pitch = s.cw_pitch;
+                                let old_rit_offset = s.rit_offset;
+                                let old_transmit = s.transmit;
+                                let old_split = s.split;
+                                let old_rit = s.rit;
+                                let old_xit = s.xit;
+                                let old_vfo = s.vfo.clone();
+                                s.connected = true;
+                                for (name, value) in &values {
+                                    match (name.as_str(), value) {
+                                        ("freq_a", Value::Integer(f)) => s.freq_a = *f as i32,
+                                        ("freq_b", Value::Integer(f)) => s.freq_b = *f as i32,
+                                        ("mode", Value::String(m)) => s.mode = m.clone(),
+                                        ("vfo", Value::String(v)) => s.vfo = v.clone(),
+                                        ("cw_pitch", Value::Integer(p)) => s.cw_pitch = *p as i32,
+                                        ("transmit", Value::Boolean(t)) => s.transmit = *t,
+                                        ("split", Value::Boolean(sp)) => s.split = *sp,
+                                        ("rit", Value::Boolean(r)) => s.rit = *r,
+                                        ("xit", Value::Boolean(x)) => s.xit = *x,
+                                        ("rit_offset", Value::Integer(o)) => {
+                                            s.rit_offset = *o as i32
                                         }
+                                        _ => {}
                                     }
-                                    let mut mask: i32 = 0;
-                                    if s.freq_a != old_freq_a {
-                                        mask |= RigParamX::FreqA as i32 | RigParamX::Freq as i32;
-                                    }
-                                    if s.freq_b != old_freq_b {
-                                        mask |= RigParamX::FreqB as i32 | RigParamX::Freq as i32;
-                                    }
-                                    if s.mode != old_mode {
-                                        mask |= mode_str_to_rigparam(&s.mode) as i32;
-                                    }
-                                    if s.cw_pitch != old_cw_pitch {
-                                        mask |= RigParamX::Pitch as i32;
-                                    }
-                                    if s.rit_offset != old_rit_offset {
-                                        mask |= RigParamX::RitOffset as i32;
-                                    }
-                                    if s.transmit != old_transmit {
-                                        mask |= if s.transmit {
-                                            RigParamX::Tx as i32
-                                        } else {
-                                            RigParamX::Rx as i32
-                                        };
-                                    }
-                                    if s.split != old_split {
-                                        mask |= if s.split {
-                                            RigParamX::SplitOn as i32
-                                        } else {
-                                            RigParamX::SplitOff as i32
-                                        };
-                                    }
-                                    if s.rit != old_rit {
-                                        mask |= if s.rit {
-                                            RigParamX::RitOn as i32
-                                        } else {
-                                            RigParamX::RitOff as i32
-                                        };
-                                    }
-                                    if s.xit != old_xit {
-                                        mask |= if s.xit {
-                                            RigParamX::XitOn as i32
-                                        } else {
-                                            RigParamX::XitOff as i32
-                                        };
-                                    }
-                                    if s.vfo != old_vfo {
-                                        mask |= vfo_str_to_rigparam(&s.vfo) as i32;
-                                    }
-                                    mask
-                                };
-
-                                if params_bitmask != 0 {
-                                    let rig_number = (slot as i32) + 1;
-                                    fire_params_change(
-                                        &event_sinks_list_clone,
-                                        rig_number,
-                                        params_bitmask,
-                                    );
                                 }
+                                let mut mask: i32 = 0;
+                                if s.freq_a != old_freq_a {
+                                    mask |= RigParamX::FreqA as i32 | RigParamX::Freq as i32;
+                                }
+                                if s.freq_b != old_freq_b {
+                                    mask |= RigParamX::FreqB as i32 | RigParamX::Freq as i32;
+                                }
+                                if s.mode != old_mode {
+                                    mask |= mode_str_to_rigparam(&s.mode) as i32;
+                                }
+                                if s.cw_pitch != old_cw_pitch {
+                                    mask |= RigParamX::Pitch as i32;
+                                }
+                                if s.rit_offset != old_rit_offset {
+                                    mask |= RigParamX::RitOffset as i32;
+                                }
+                                if s.transmit != old_transmit {
+                                    mask |= if s.transmit {
+                                        RigParamX::Tx as i32
+                                    } else {
+                                        RigParamX::Rx as i32
+                                    };
+                                }
+                                if s.split != old_split {
+                                    mask |= if s.split {
+                                        RigParamX::SplitOn as i32
+                                    } else {
+                                        RigParamX::SplitOff as i32
+                                    };
+                                }
+                                if s.rit != old_rit {
+                                    mask |= if s.rit {
+                                        RigParamX::RitOn as i32
+                                    } else {
+                                        RigParamX::RitOff as i32
+                                    };
+                                }
+                                if s.xit != old_xit {
+                                    mask |= if s.xit {
+                                        RigParamX::XitOn as i32
+                                    } else {
+                                        RigParamX::XitOff as i32
+                                    };
+                                }
+                                if s.vfo != old_vfo {
+                                    mask |= vfo_str_to_rigparam(&s.vfo) as i32;
+                                }
+                                mask
+                            };
+
+                            if params_bitmask != 0 {
+                                let rig_number = (slot as i32) + 1;
+                                fire_params_change(
+                                    &event_sinks_list_clone,
+                                    rig_number,
+                                    params_bitmask,
+                                );
                             }
                         }
                     }
