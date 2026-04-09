@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::app::App;
 
@@ -11,6 +11,10 @@ pub enum InputAction {
 pub fn handle_key_event(key: KeyEvent, app: &mut App) -> InputAction {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         return InputAction::Quit;
+    }
+
+    if key.kind != KeyEventKind::Press {
+        return InputAction::None;
     }
 
     match key.code {
