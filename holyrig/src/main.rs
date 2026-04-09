@@ -52,9 +52,6 @@ struct RadioCommand {
     /// server address
     #[argh(option, default = "\"127.0.0.1:5973\".parse().unwrap()")]
     addr: std::net::SocketAddr,
-    /// rig index to control (default: first connected rig)
-    #[argh(option)]
-    rig: Option<usize>,
 }
 
 fn init_tracing(
@@ -129,7 +126,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Some(SubCommand::Console(cmd)) => return holyrig_console::run(cmd.addr).await,
-        Some(SubCommand::Radio(cmd)) => return holyrig_radio::run(cmd.rig, cmd.addr).await,
+        Some(SubCommand::Radio(cmd)) => return holyrig_radio::run(cmd.addr).await,
         None => {}
     }
 

@@ -2096,6 +2096,7 @@ dependencies = [
  "anyhow",
  "eframe",
  "egui",
+ "egui_dock",
  "holyrig-client",
  "serde_json",
  "tokio",
