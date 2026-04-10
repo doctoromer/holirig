@@ -52,9 +52,9 @@ impl EventSinks {
             cArgs: 1,
             cNamedArgs: 0,
         };
-        for sink in sinks.values() {
-            unsafe {
-                let _ = sink.Invoke(
+        for (cookie, sink) in sinks.iter() {
+            let hr = unsafe {
+                sink.Invoke(
                     dispid,
                     &GUID::zeroed(),
                     0,
@@ -63,7 +63,10 @@ impl EventSinks {
                     None,
                     None,
                     None,
-                );
+                )
+            };
+            if let Err(e) = hr {
+                tracing::warn!(cookie, dispid, %e, "Event Invoke failed");
             }
         }
     }
@@ -93,9 +96,9 @@ impl EventSinks {
             cArgs: 2,
             cNamedArgs: 0,
         };
-        for sink in sinks.values() {
-            unsafe {
-                let _ = sink.Invoke(
+        for (cookie, sink) in sinks.iter() {
+            let hr = unsafe {
+                sink.Invoke(
                     0x04,
                     &GUID::zeroed(),
                     0,
@@ -104,7 +107,10 @@ impl EventSinks {
                     None,
                     None,
                     None,
-                );
+                )
+            };
+            if let Err(e) = hr {
+                tracing::warn!(cookie, %e, "ParamsChange Invoke failed");
             }
         }
     }
