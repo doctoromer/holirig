@@ -1,3 +1,7 @@
+use windows::Win32::System::Com::{ITypeLib, SYS_WIN32, SYS_WIN64};
+use windows::Win32::System::Ole::{
+    LoadTypeLibEx, REGKIND_NONE, RegisterTypeLibForUser, UnRegisterTypeLibForUser,
+};
 use windows::Win32::System::Registry::HKEY_CURRENT_USER;
 use windows::Win32::System::Registry::{
     HKEY, KEY_WOW64_32KEY, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SAM_FLAGS, REG_SZ, RegCloseKey,
@@ -5,6 +9,8 @@ use windows::Win32::System::Registry::{
 };
 use windows::core::GUID;
 use windows_core::PCWSTR;
+
+pub const LIBID_OMNIRIG: GUID = GUID::from_u128(0x4FE359C5_A58F_459D_BE95_CA559FB4F270);
 
 type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -121,5 +127,34 @@ pub fn register_com_component(
 pub fn unregister_com_component(clsid: &GUID) -> Result<()> {
     let _ = unregister_com_component_with_access(clsid, REG_SAM_FLAGS(0));
     let _ = unregister_com_component_with_access(clsid, KEY_WOW64_32KEY);
+    Ok(())
+}
+
+pub fn register_type_library(clsid: &GUID, tlb_path: &str) -> Result<()> {
+    tracing::info!("Registering type library at {}", tlb_path);
+
+    let path_wide = to_wide_string(tlb_path);
+    let path_pcwstr = PCWSTR::from_raw(path_wide.as_ptr());
+
+    unsafe {
+        let type_lib: ITypeLib = LoadTypeLibEx(path_pcwstr, REGKIND_NONE)?;
+        RegisterTypeLibForUser(&type_lib, path_pcwstr, PCWSTR::null())?;
+    }
+
+    let libid_str = format!("{{{:?}}}", LIBID_OMNIRIG);
+    for extra_access in [REG_SAM_FLAGS(0), KEY_WOW64_32KEY] {
+        let key_path = format!("SOFTWARE\\Classes\\CLSID\\{{{:?}}}\\TypeLib", clsid);
+        let key = RegKey::new(HKEY_CURRENT_USER, &key_path, extra_access)?;
+        key.set_default_value(&libid_str)?;
+    }
+
+    Ok(())
+}
+
+pub fn unregister_type_library() -> Result<()> {
+    unsafe {
+        let _ = UnRegisterTypeLibForUser(&LIBID_OMNIRIG, 1, 0, 0, SYS_WIN64);
+        let _ = UnRegisterTypeLibForUser(&LIBID_OMNIRIG, 1, 0, 0, SYS_WIN32);
+    }
     Ok(())
 }

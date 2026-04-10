@@ -197,6 +197,10 @@ fn com_thread_init_and_run(
 
     registry::register_com_component(&CLSID_OMNIRIG, exe_path_str, PROG_ID, "1.0")?;
 
+    let tlb_path = exe_path.with_file_name("OmniRig.tlb");
+    let tlb_path_str = tlb_path.to_str().ok_or("Invalid TLB path")?;
+    registry::register_type_library(&CLSID_OMNIRIG, tlb_path_str)?;
+
     let dispatcher = EventDispatcher::new();
     provider.set_event_dispatcher(dispatcher.clone());
 
@@ -235,6 +239,7 @@ fn com_thread_init_and_run(
 
         let _ = CoRevokeClassObject(cookie);
         let _ = registry::unregister_com_component(&CLSID_OMNIRIG);
+        let _ = registry::unregister_type_library();
         CoUninitialize();
     }
 
