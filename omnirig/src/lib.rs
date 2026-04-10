@@ -22,6 +22,7 @@ mod port_bits;
 pub mod provider;
 mod registry;
 pub mod rig;
+pub mod typelib;
 
 pub use enums::{RigParamX, RigStatusX};
 pub use provider::{
@@ -200,6 +201,7 @@ fn com_thread_init_and_run(
     let tlb_path = exe_path.with_file_name("OmniRig.tlb");
     let tlb_path_str = tlb_path.to_str().ok_or("Invalid TLB path")?;
     registry::register_type_library(&CLSID_OMNIRIG, tlb_path_str)?;
+    typelib::init(tlb_path_str)?;
 
     let dispatcher = EventDispatcher::new();
     provider.set_event_dispatcher(dispatcher.clone());

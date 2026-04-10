@@ -92,7 +92,7 @@ fn variant_to_bytes(variant: &VARIANT) -> Result<Vec<u8>, HRESULT> {
     }
 }
 
-#[auto_dispatch]
+#[auto_dispatch(type_info = crate::typelib::rigx_type_info)]
 impl RigX {
     #[id(0x01)]
     #[getter]

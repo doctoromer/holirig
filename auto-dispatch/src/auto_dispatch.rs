@@ -68,6 +68,7 @@ pub struct AutoDispatch {
     dispid_to_name: BTreeMap<DispId, String>,
     dispid_to_const: BTreeMap<DispId, Ident>,
     dispatch_funcs: BTreeMap<DispId, DispatchFunc>,
+    pub(crate) type_info_fn: Option<syn::Path>,
 }
 
 fn get_simple_path(path: &syn::Path) -> syn::Result<&syn::PathSegment> {
@@ -85,6 +86,7 @@ impl AutoDispatch {
             dispid_to_name: BTreeMap::new(),
             dispid_to_const: BTreeMap::new(),
             dispatch_funcs: BTreeMap::new(),
+            type_info_fn: None,
         }
     }
 
@@ -718,6 +720,37 @@ impl ToTokens for AutoDispatch {
         let get_ids_of_names = self.generate_get_ids_of_names();
         let invoke = self.generate_invoke();
 
+        let (get_type_info_count, get_type_info) = if let Some(ref path) = self.type_info_fn {
+            (
+                quote! {
+                    fn GetTypeInfoCount(&self) -> windows::core::Result<u32> {
+                        Ok(1)
+                    }
+                },
+                quote! {
+                    fn GetTypeInfo(&self, itinfo: u32, _lcid: u32) -> windows::core::Result<windows::Win32::System::Com::ITypeInfo> {
+                        if itinfo != 0 {
+                            return Err(windows::Win32::Foundation::DISP_E_BADINDEX.into());
+                        }
+                        #path()
+                    }
+                },
+            )
+        } else {
+            (
+                quote! {
+                    fn GetTypeInfoCount(&self) -> windows::core::Result<u32> {
+                        Ok(0)
+                    }
+                },
+                quote! {
+                    fn GetTypeInfo(&self, _itinfo: u32, _lcid: u32) -> windows::core::Result<windows::Win32::System::Com::ITypeInfo> {
+                        Err(windows::Win32::Foundation::E_NOTIMPL.into())
+                    }
+                },
+            )
+        };
+
         let result = quote! {
             impl #impl_struct_ident {
                 #dispids_consts
@@ -726,14 +759,8 @@ impl ToTokens for AutoDispatch {
 
             #[allow(clippy::not_unsafe_ptr_arg_deref)]
             impl IDispatch_Impl for #impl_struct_ident {
-                fn GetTypeInfoCount(&self) -> windows::core::Result<u32> {
-                    Ok(0)
-                }
-
-                fn GetTypeInfo(&self, _itinfo: u32, _lcid: u32) -> windows::core::Result<windows::Win32::System::Com::ITypeInfo> {
-                    Err(windows::Win32::Foundation::E_NOTIMPL.into())
-                }
-
+                #get_type_info_count
+                #get_type_info
                 #get_ids_of_names
                 #invoke
             }

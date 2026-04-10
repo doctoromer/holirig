@@ -71,7 +71,7 @@ impl IConnectionPointContainer_Impl for OmniRigX_Impl {
     }
 }
 
-#[auto_dispatch]
+#[auto_dispatch(type_info = crate::typelib::omnirigx_type_info)]
 impl OmniRigX {
     #[id(0x01)]
     #[getter]
