@@ -59,7 +59,10 @@ impl OmniRigX {
 
 impl IConnectionPointContainer_Impl for OmniRigX_Impl {
     fn EnumConnectionPoints(&self) -> windows::core::Result<IEnumConnectionPoints> {
-        Err(windows::Win32::Foundation::E_NOTIMPL.into())
+        Ok(
+            crate::connection_point::EnumConnectionPoints::new(vec![self.connection_point.clone()])
+                .into(),
+        )
     }
 
     fn FindConnectionPoint(&self, riid: *const GUID) -> windows::core::Result<IConnectionPoint> {

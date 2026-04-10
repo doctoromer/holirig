@@ -6,13 +6,15 @@ use std::sync::{Arc, Mutex};
 
 use tracing::trace;
 use windows::Win32::Foundation::E_NOTIMPL;
+use windows::Win32::Foundation::S_FALSE;
 use windows::Win32::System::Com::{
     DISPATCH_FLAGS, DISPPARAMS, IConnectionPoint, IConnectionPoint_Impl, IConnectionPointContainer,
-    IDispatch, IEnumConnections,
+    IDispatch, IEnumConnectionPoints, IEnumConnectionPoints_Impl, IEnumConnections,
 };
 use windows::Win32::System::Ole::CONNECT_E_NOCONNECTION;
 use windows::Win32::System::Variant::VARIANT;
 use windows::core::{GUID, IUnknown, Interface, Ref, implement};
+use windows_core::HRESULT;
 
 pub const OMNIRIG_EVENTS_IID: GUID = GUID::from_u128(0x2219175F_E561_47E7_AD17_73C4D8891AA1);
 
@@ -186,4 +188,78 @@ impl IConnectionPoint_Impl for OmniRigEventsConnectionPoint_Impl {
 /// Returns `CONNECT_E_NOCONNECTION` as a windows error for use in FindConnectionPoint.
 pub fn connect_e_noconnection() -> windows::core::Error {
     windows::core::Error::from_hresult(CONNECT_E_NOCONNECTION)
+}
+
+#[implement(IEnumConnectionPoints)]
+pub struct EnumConnectionPoints {
+    points: Vec<IConnectionPoint>,
+    index: Mutex<usize>,
+}
+
+impl EnumConnectionPoints {
+    pub fn new(points: Vec<IConnectionPoint>) -> Self {
+        Self {
+            points,
+            index: Mutex::new(0),
+        }
+    }
+}
+
+impl IEnumConnectionPoints_Impl for EnumConnectionPoints_Impl {
+    fn Next(
+        &self,
+        cconnections: u32,
+        ppcp: *mut Option<IConnectionPoint>,
+        pcfetched: *mut u32,
+    ) -> HRESULT {
+        let mut idx = self.index.lock().unwrap();
+        let remaining = self.points.len().saturating_sub(*idx);
+        let to_copy = (cconnections as usize).min(remaining);
+
+        for i in 0..to_copy {
+            unsafe {
+                *ppcp.add(i) = Some(self.points[*idx + i].clone());
+            }
+        }
+        *idx += to_copy;
+
+        if !pcfetched.is_null() {
+            unsafe {
+                *pcfetched = to_copy as u32;
+            }
+        }
+
+        if to_copy == cconnections as usize {
+            HRESULT(0) // S_OK
+        } else {
+            S_FALSE
+        }
+    }
+
+    fn Skip(&self, cconnections: u32) -> windows::core::Result<()> {
+        let mut idx = self.index.lock().unwrap();
+        let remaining = self.points.len().saturating_sub(*idx);
+        let to_skip = (cconnections as usize).min(remaining);
+        *idx += to_skip;
+
+        if to_skip == cconnections as usize {
+            Ok(())
+        } else {
+            Err(S_FALSE.into())
+        }
+    }
+
+    fn Reset(&self) -> windows::core::Result<()> {
+        *self.index.lock().unwrap() = 0;
+        Ok(())
+    }
+
+    fn Clone(&self) -> windows::core::Result<IEnumConnectionPoints> {
+        let idx = *self.index.lock().unwrap();
+        let clone = EnumConnectionPoints {
+            points: self.points.clone(),
+            index: Mutex::new(idx),
+        };
+        Ok(clone.into())
+    }
 }
