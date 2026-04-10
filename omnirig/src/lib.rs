@@ -10,6 +10,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::GUID;
 
+use tracing::trace;
+
 use crate::connection_point::EventSinks;
 use crate::omnirig::OmniRigXFactory;
 
@@ -54,6 +56,11 @@ impl EventDispatcher {
     }
 
     pub fn fire_params_change(&self, rig_number: i32, params: i32) {
+        trace!(
+            rig_number,
+            params = format_args!("0x{params:08X}"),
+            "Queuing ParamsChange event"
+        );
         self.queue
             .lock()
             .unwrap()
@@ -61,6 +68,7 @@ impl EventDispatcher {
     }
 
     pub fn fire_status_change(&self, rig_number: i32) {
+        trace!(rig_number, "Queuing StatusChange event");
         self.queue
             .lock()
             .unwrap()
@@ -68,6 +76,7 @@ impl EventDispatcher {
     }
 
     pub(crate) fn register_sinks(&self, sinks: Arc<EventSinks>) {
+        trace!("Queuing new event sinks registration");
         self.queue
             .lock()
             .unwrap()
@@ -83,8 +92,14 @@ fn process_events(dispatcher: &EventDispatcher, sink_list: &mut Vec<Weak<EventSi
     for event in dispatcher.drain() {
         match event {
             ComEvent::RegisterSinks(sinks) => {
+                let before = sink_list.len();
                 sink_list.retain(|w| w.strong_count() > 0);
                 sink_list.push(Arc::downgrade(&sinks));
+                trace!(
+                    active_sinks = sink_list.len(),
+                    pruned = before - (sink_list.len() - 1),
+                    "Registered new event sinks on COM thread"
+                );
             }
             ComEvent::ParamsChange { rig_number, params } => {
                 for weak in sink_list.iter() {

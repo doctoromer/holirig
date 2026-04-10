@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use tracing::trace;
 use windows::Win32::Foundation::E_NOTIMPL;
 use windows::Win32::System::Com::{
     DISPATCH_FLAGS, DISPPARAMS, IConnectionPoint, IConnectionPoint_Impl, IConnectionPointContainer,
@@ -67,11 +68,17 @@ impl EventSinks {
 
     /// Fire `StatusChange(RigNumber)` — DISPID 0x03
     pub fn fire_status_change(&self, rig_number: i32) {
+        trace!(rig_number, "Firing StatusChange event");
         self.fire_one_arg(0x03, rig_number);
     }
 
     /// Fire `ParamsChange(RigNumber, Params)` — DISPID 0x04
     pub fn fire_params_change(&self, rig_number: i32, params: i32) {
+        trace!(
+            rig_number,
+            params = format_args!("0x{params:08X}"),
+            "Firing ParamsChange event"
+        );
         let sinks = self.sinks.lock().unwrap();
         if sinks.is_empty() {
             return;
@@ -102,6 +109,7 @@ impl EventSinks {
 
     /// Fire `VisibleChange()` — DISPID 0x01
     pub fn fire_visible_change(&self) {
+        trace!("Firing VisibleChange event");
         let sinks = self.sinks.lock().unwrap();
         if sinks.is_empty() {
             return;
@@ -151,11 +159,22 @@ impl IConnectionPoint_Impl for OmniRigEventsConnectionPoint_Impl {
         let disp: IDispatch = unk.cast()?;
         let cookie = self.sinks.next_cookie.fetch_add(1, Ordering::Relaxed);
         self.sinks.sinks.lock().unwrap().insert(cookie, disp);
+        trace!(cookie, "Client subscribed to events via Advise");
         Ok(cookie)
     }
 
     fn Unadvise(&self, dw_cookie: u32) -> windows::core::Result<()> {
-        self.sinks.sinks.lock().unwrap().remove(&dw_cookie);
+        let removed = self
+            .sinks
+            .sinks
+            .lock()
+            .unwrap()
+            .remove(&dw_cookie)
+            .is_some();
+        trace!(
+            cookie = dw_cookie,
+            removed, "Client unsubscribed via Unadvise"
+        );
         Ok(())
     }
 
