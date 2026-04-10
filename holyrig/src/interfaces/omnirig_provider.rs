@@ -227,7 +227,10 @@ impl HolyRigProvider {
                                     mask |= RigParamX::FreqB as i32 | RigParamX::Freq as i32;
                                 }
                                 if s.mode != old_mode {
-                                    mask |= mode_str_to_rigparam(&s.mode) as i32;
+                                    let param = mode_str_to_rigparam(&s.mode);
+                                    if param != RigParamX::Unknown {
+                                        mask |= param as i32;
+                                    }
                                 }
                                 if s.cw_pitch != old_cw_pitch {
                                     mask |= RigParamX::Pitch as i32;
@@ -264,7 +267,10 @@ impl HolyRigProvider {
                                     };
                                 }
                                 if s.vfo != old_vfo {
-                                    mask |= vfo_str_to_rigparam(&s.vfo) as i32;
+                                    let param = vfo_str_to_rigparam(&s.vfo);
+                                    if param != RigParamX::Unknown {
+                                        mask |= param as i32;
+                                    }
                                 }
                                 mask
                             };
