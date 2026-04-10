@@ -1,8 +1,9 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex};
 
 use omnirig::{
-    DummyPortBits, EventSinks, OmniRigProvider, PortBitsControl, RigControl, RigParamX, RigStatusX,
+    DummyPortBits, EventDispatcher, OmniRigProvider, PortBitsControl, RigControl, RigParamX,
+    RigStatusX,
 };
 use parking_lot::RwLock;
 use tokio::sync::broadcast::Receiver;
@@ -146,7 +147,7 @@ pub struct HolyRigProvider {
     statuses: [Arc<RwLock<CachedStatus>>; 2],
     rig_ids: [Option<RigId>; 2],
     tokio_runtime: tokio::runtime::Handle,
-    event_sinks_list: Arc<Mutex<Vec<Weak<EventSinks>>>>,
+    event_dispatcher: Arc<Mutex<Option<EventDispatcher>>>,
 }
 
 impl HolyRigProvider {
@@ -175,11 +176,11 @@ impl HolyRigProvider {
             }
         }
 
-        let event_sinks_list: Arc<Mutex<Vec<Weak<EventSinks>>>> = Arc::new(Mutex::new(Vec::new()));
+        let event_dispatcher: Arc<Mutex<Option<EventDispatcher>>> = Arc::new(Mutex::new(None));
 
         let statuses_clone = statuses.clone();
         let rig_ids_clone = rig_ids;
-        let event_sinks_list_clone = Arc::clone(&event_sinks_list);
+        let event_dispatcher_clone = Arc::clone(&event_dispatcher);
         tokio_runtime.spawn(async move {
             loop {
                 match message_receiver.recv().await {
@@ -270,11 +271,9 @@ impl HolyRigProvider {
 
                             if params_bitmask != 0 {
                                 let rig_number = (slot as i32) + 1;
-                                fire_params_change(
-                                    &event_sinks_list_clone,
-                                    rig_number,
-                                    params_bitmask,
-                                );
+                                if let Some(d) = event_dispatcher_clone.lock().unwrap().as_ref() {
+                                    d.fire_params_change(rig_number, params_bitmask);
+                                }
                             }
                         }
                     }
@@ -286,7 +285,9 @@ impl HolyRigProvider {
                                     matches!(status, ConnectionStatus::Connected);
                             }
                             let rig_number = (slot as i32) + 1;
-                            fire_status_change(&event_sinks_list_clone, rig_number);
+                            if let Some(d) = event_dispatcher_clone.lock().unwrap().as_ref() {
+                                d.fire_status_change(rig_number);
+                            }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -304,7 +305,7 @@ impl HolyRigProvider {
             statuses,
             rig_ids,
             tokio_runtime,
-            event_sinks_list,
+            event_dispatcher,
         }
     }
 
@@ -331,32 +332,8 @@ impl OmniRigProvider for HolyRigProvider {
         self.create_rig(1)
     }
 
-    fn register_event_sinks(&self, sinks: Arc<EventSinks>) {
-        let mut list = self.event_sinks_list.lock().unwrap();
-        list.retain(|w| w.strong_count() > 0);
-        list.push(Arc::downgrade(&sinks));
-    }
-}
-
-fn fire_params_change(
-    event_sinks_list: &Arc<Mutex<Vec<Weak<EventSinks>>>>,
-    rig_number: i32,
-    params: i32,
-) {
-    let list = event_sinks_list.lock().unwrap();
-    for weak in list.iter() {
-        if let Some(sinks) = weak.upgrade() {
-            sinks.fire_params_change(rig_number, params);
-        }
-    }
-}
-
-fn fire_status_change(event_sinks_list: &Arc<Mutex<Vec<Weak<EventSinks>>>>, rig_number: i32) {
-    let list = event_sinks_list.lock().unwrap();
-    for weak in list.iter() {
-        if let Some(sinks) = weak.upgrade() {
-            sinks.fire_status_change(rig_number);
-        }
+    fn set_event_dispatcher(&self, dispatcher: EventDispatcher) {
+        *self.event_dispatcher.lock().unwrap() = Some(dispatcher);
     }
 }
 

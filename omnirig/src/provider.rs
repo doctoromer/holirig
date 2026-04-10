@@ -1,12 +1,12 @@
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 
-use crate::connection_point::EventSinks;
+use crate::EventDispatcher;
 use crate::enums::{RigParamX, RigStatusX};
 
 pub trait OmniRigProvider: Send + Sync + 'static {
     fn create_rig1(&self) -> Box<dyn RigControl>;
     fn create_rig2(&self) -> Box<dyn RigControl>;
-    fn register_event_sinks(&self, _sinks: Arc<EventSinks>) {}
+    fn set_event_dispatcher(&self, _dispatcher: EventDispatcher) {}
 }
 
 pub trait RigControl: Send + Sync {

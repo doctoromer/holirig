@@ -16,6 +16,7 @@ use windows_core::{BOOL, HRESULT, interface};
 
 use tracing::{debug, trace};
 
+use crate::EventDispatcher;
 use crate::connection_point::{
     EventSinks, OMNIRIG_EVENTS_IID, OmniRigEventsConnectionPoint, connect_e_noconnection,
 };
@@ -172,11 +173,15 @@ impl IOmniRigX_Impl for OmniRigX_Impl {
 #[implement(IClassFactory)]
 pub struct OmniRigXFactory {
     provider: Arc<dyn OmniRigProvider>,
+    dispatcher: EventDispatcher,
 }
 
 impl OmniRigXFactory {
-    pub fn new(provider: Arc<dyn OmniRigProvider>) -> Self {
-        Self { provider }
+    pub fn new(provider: Arc<dyn OmniRigProvider>, dispatcher: EventDispatcher) -> Self {
+        Self {
+            provider,
+            dispatcher,
+        }
     }
 }
 
@@ -205,7 +210,7 @@ impl IClassFactory_Impl for OmniRigXFactory_Impl {
 
             debug!("OmniRigXFactory: Creating new OmniRigX instance");
             let event_sinks = EventSinks::new();
-            self.provider.register_event_sinks(Arc::clone(&event_sinks));
+            self.dispatcher.register_sinks(Arc::clone(&event_sinks));
             let instance: IOmniRigX =
                 OmniRigX::from_provider(self.provider.as_ref(), event_sinks).into();
             *ppvobject = std::mem::transmute_copy(&instance);

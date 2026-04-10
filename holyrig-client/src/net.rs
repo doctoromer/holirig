@@ -24,7 +24,9 @@ impl TcpClient {
         let (reader, writer) = stream.into_split();
         Ok(Self {
             sender: TcpSender { writer },
-            receiver: TcpReceiver { reader: BufReader::new(reader) },
+            receiver: TcpReceiver {
+                reader: BufReader::new(reader),
+            },
         })
     }
 

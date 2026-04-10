@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Barrier, Mutex, Weak};
 use std::thread::JoinHandle;
 use windows::Win32::System::Com::{
     CLSCTX_LOCAL_SERVER, COINIT_MULTITHREADED, CoInitializeEx, CoRegisterClassObject,
@@ -10,6 +10,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::GUID;
 
+use crate::connection_point::EventSinks;
 use crate::omnirig::OmniRigXFactory;
 
 pub mod connection_point;
@@ -20,11 +21,88 @@ pub mod provider;
 mod registry;
 pub mod rig;
 
-pub use connection_point::EventSinks;
 pub use enums::{RigParamX, RigStatusX};
 pub use provider::{
     DummyPortBits, DummyProvider, DummyRig, OmniRigProvider, PortBitsControl, RigControl,
 };
+
+// ---------------------------------------------------------------------------
+// EventDispatcher — marshals event-firing onto the COM thread
+// ---------------------------------------------------------------------------
+
+enum ComEvent {
+    RegisterSinks(Arc<EventSinks>),
+    ParamsChange { rig_number: i32, params: i32 },
+    StatusChange { rig_number: i32 },
+}
+
+/// Thread-safe handle for dispatching OmniRig events.
+///
+/// Events are queued and fired on the COM thread, ensuring that
+/// `IDispatch::Invoke` on client event sinks happens in the correct
+/// COM apartment.
+#[derive(Clone)]
+pub struct EventDispatcher {
+    queue: Arc<Mutex<Vec<ComEvent>>>,
+}
+
+impl EventDispatcher {
+    fn new() -> Self {
+        Self {
+            queue: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub fn fire_params_change(&self, rig_number: i32, params: i32) {
+        self.queue
+            .lock()
+            .unwrap()
+            .push(ComEvent::ParamsChange { rig_number, params });
+    }
+
+    pub fn fire_status_change(&self, rig_number: i32) {
+        self.queue
+            .lock()
+            .unwrap()
+            .push(ComEvent::StatusChange { rig_number });
+    }
+
+    pub(crate) fn register_sinks(&self, sinks: Arc<EventSinks>) {
+        self.queue
+            .lock()
+            .unwrap()
+            .push(ComEvent::RegisterSinks(sinks));
+    }
+
+    fn drain(&self) -> Vec<ComEvent> {
+        std::mem::take(&mut *self.queue.lock().unwrap())
+    }
+}
+
+fn process_events(dispatcher: &EventDispatcher, sink_list: &mut Vec<Weak<EventSinks>>) {
+    for event in dispatcher.drain() {
+        match event {
+            ComEvent::RegisterSinks(sinks) => {
+                sink_list.retain(|w| w.strong_count() > 0);
+                sink_list.push(Arc::downgrade(&sinks));
+            }
+            ComEvent::ParamsChange { rig_number, params } => {
+                for weak in sink_list.iter() {
+                    if let Some(s) = weak.upgrade() {
+                        s.fire_params_change(rig_number, params);
+                    }
+                }
+            }
+            ComEvent::StatusChange { rig_number } => {
+                for weak in sink_list.iter() {
+                    if let Some(s) = weak.upgrade() {
+                        s.fire_status_change(rig_number);
+                    }
+                }
+            }
+        }
+    }
+}
 
 pub const CLSID_OMNIRIG: GUID = GUID::from_u128(0x0839E8C6_ED30_4950_8087_966F970F0CAE);
 pub const PROG_ID: &str = "OmniRig.OmniRigX";
@@ -104,12 +182,15 @@ fn com_thread_init_and_run(
 
     registry::register_com_component(&CLSID_OMNIRIG, exe_path_str, PROG_ID, "1.0")?;
 
+    let dispatcher = EventDispatcher::new();
+    provider.set_event_dispatcher(dispatcher.clone());
+
     let provider = Arc::new(provider);
 
     unsafe {
         CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
 
-        let factory: IClassFactory = OmniRigXFactory::new(provider).into();
+        let factory: IClassFactory = OmniRigXFactory::new(provider, dispatcher.clone()).into();
 
         let cookie = CoRegisterClassObject(
             &CLSID_OMNIRIG,
@@ -121,14 +202,19 @@ fn com_thread_init_and_run(
         // Init complete — unblock caller
         barrier.wait();
 
-        // Message loop — runs until shutdown
+        // Message loop — runs until shutdown.
+        // Events queued via EventDispatcher are drained and fired here,
+        // ensuring IDispatch::Invoke runs on this COM-initialized thread.
         let mut msg = MSG::default();
+        let mut sink_list: Vec<Weak<EventSinks>> = Vec::new();
         while !shutdown_flag.load(Ordering::SeqCst) {
+            process_events(&dispatcher, &mut sink_list);
+
             if PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             } else {
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                std::thread::sleep(std::time::Duration::from_millis(10));
             }
         }
 
