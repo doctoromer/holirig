@@ -7,11 +7,12 @@ use std::sync::{Arc, Mutex};
 use tracing::trace;
 use windows::Win32::Foundation::E_NOTIMPL;
 use windows::Win32::Foundation::S_FALSE;
+use windows::Win32::System::Com::Marshal::CoMarshalInterThreadInterfaceInStream;
+use windows::Win32::System::Com::StructuredStorage::CoGetInterfaceAndReleaseStream;
 use windows::Win32::System::Com::{
     DISPATCH_FLAGS, DISPPARAMS, IConnectionPoint, IConnectionPoint_Impl, IConnectionPointContainer,
-    IDispatch, IEnumConnectionPoints, IEnumConnectionPoints_Impl, IEnumConnections,
+    IDispatch, IEnumConnectionPoints, IEnumConnectionPoints_Impl, IEnumConnections, IStream,
 };
-use windows::Win32::System::Ole::CONNECT_E_NOCONNECTION;
 use windows::Win32::System::Variant::VARIANT;
 use windows::core::{GUID, IUnknown, Interface, Ref, implement};
 use windows_core::HRESULT;
@@ -20,15 +21,20 @@ pub const OMNIRIG_EVENTS_IID: GUID = GUID::from_u128(0x2219175F_E561_47E7_AD17_7
 
 const DISPATCH_METHOD: DISPATCH_FLAGS = DISPATCH_FLAGS(1);
 
+pub struct MarshaledSink {
+    pub cookie: u32,
+    pub stream: IStream,
+}
+
+unsafe impl Send for MarshaledSink {}
+
 /// Shared list of event sinks registered by COM clients via IConnectionPoint::Advise.
-/// Held as Arc by OmniRigX (for IConnectionPointContainer) and as Weak by the provider
-/// (for firing events when rig state changes).
 pub struct EventSinks {
     sinks: Mutex<HashMap<u32, IDispatch>>,
     next_cookie: AtomicU32,
+    pending: Mutex<Vec<MarshaledSink>>,
 }
 
-// Safety: IDispatch is Send + Sync in windows-rs; COM marshals cross-apartment calls transparently.
 unsafe impl Send for EventSinks {}
 unsafe impl Sync for EventSinks {}
 
@@ -37,7 +43,30 @@ impl EventSinks {
         Arc::new(Self {
             sinks: Mutex::new(HashMap::new()),
             next_cookie: AtomicU32::new(1),
+            pending: Mutex::new(Vec::new()),
         })
+    }
+
+    /// Unmarshal any pending sinks onto the current COM thread.
+    pub fn unmarshal_pending(&self) {
+        let pending: Vec<MarshaledSink> = std::mem::take(&mut *self.pending.lock().unwrap());
+        for item in pending {
+            let result: windows::core::Result<IDispatch> =
+                unsafe { CoGetInterfaceAndReleaseStream(&item.stream) };
+            match result {
+                Ok(disp) => {
+                    trace!(
+                        cookie = item.cookie,
+                        thread_id = ?std::thread::current().id(),
+                        "Unmarshaled event sink on COM thread"
+                    );
+                    self.sinks.lock().unwrap().insert(item.cookie, disp);
+                }
+                Err(err) => {
+                    tracing::warn!(cookie = item.cookie, %err, "Failed to unmarshal event sink");
+                }
+            }
+        }
     }
 
     fn fire_one_arg(&self, dispid: i32, rig_number: i32) {
@@ -53,7 +82,7 @@ impl EventSinks {
             cNamedArgs: 0,
         };
         for (cookie, sink) in sinks.iter() {
-            let hr = unsafe {
+            let hresult = unsafe {
                 sink.Invoke(
                     dispid,
                     &GUID::zeroed(),
@@ -65,23 +94,22 @@ impl EventSinks {
                     None,
                 )
             };
-            if let Err(e) = hr {
-                tracing::warn!(cookie, dispid, %e, "Event Invoke failed");
+            if let Err(err) = hresult {
+                tracing::warn!(cookie, dispid, %err, "Event Invoke failed");
             }
         }
     }
 
-    /// Fire `StatusChange(RigNumber)` — DISPID 0x03
     pub fn fire_status_change(&self, rig_number: i32) {
         trace!(rig_number, "Firing StatusChange event");
         self.fire_one_arg(0x03, rig_number);
     }
 
-    /// Fire `ParamsChange(RigNumber, Params)` — DISPID 0x04
     pub fn fire_params_change(&self, rig_number: i32, params: i32) {
         trace!(
             rig_number,
             params = format_args!("0x{params:08X}"),
+            thread_id = ?std::thread::current().id(),
             "Firing ParamsChange event"
         );
         let sinks = self.sinks.lock().unwrap();
@@ -109,13 +137,12 @@ impl EventSinks {
                     None,
                 )
             };
-            if let Err(e) = hr {
-                tracing::warn!(cookie, %e, "ParamsChange Invoke failed");
+            if let Err(err) = hr {
+                tracing::warn!(cookie, %err, "ParamsChange Invoke failed");
             }
         }
     }
 
-    /// Fire `VisibleChange()` — DISPID 0x01
     pub fn fire_visible_change(&self) {
         trace!("Firing VisibleChange event");
         let sinks = self.sinks.lock().unwrap();
@@ -145,7 +172,6 @@ impl EventSinks {
     }
 }
 
-/// COM object implementing IConnectionPoint for the IOmniRigXEvents dispinterface.
 #[implement(IConnectionPoint)]
 pub struct OmniRigEventsConnectionPoint {
     pub sinks: Arc<EventSinks>,
@@ -166,12 +192,30 @@ impl IConnectionPoint_Impl for OmniRigEventsConnectionPoint_Impl {
         })?;
         let disp: IDispatch = unk.cast()?;
         let cookie = self.sinks.next_cookie.fetch_add(1, Ordering::Relaxed);
-        self.sinks.sinks.lock().unwrap().insert(cookie, disp);
-        trace!(cookie, "Client subscribed to events via Advise");
+
+        // Marshal the IDispatch into a stream for later unmarshaling on the COM thread.
+        // Advise may be called on an RPC worker thread, but we need to Invoke on the COM thread.
+        let stream = unsafe { CoMarshalInterThreadInterfaceInStream(&IDispatch::IID, &disp)? };
+        self.sinks
+            .pending
+            .lock()
+            .unwrap()
+            .push(MarshaledSink { cookie, stream });
+
+        trace!(
+            cookie,
+            thread_id = ?std::thread::current().id(),
+            "Client subscribed to events via Advise (marshaled for COM thread)"
+        );
         Ok(cookie)
     }
 
     fn Unadvise(&self, dw_cookie: u32) -> windows::core::Result<()> {
+        self.sinks
+            .pending
+            .lock()
+            .unwrap()
+            .retain(|s| s.cookie != dw_cookie);
         let removed = self
             .sinks
             .sinks
@@ -189,11 +233,6 @@ impl IConnectionPoint_Impl for OmniRigEventsConnectionPoint_Impl {
     fn EnumConnections(&self) -> windows::core::Result<IEnumConnections> {
         Err(E_NOTIMPL.into())
     }
-}
-
-/// Returns `CONNECT_E_NOCONNECTION` as a windows error for use in FindConnectionPoint.
-pub fn connect_e_noconnection() -> windows::core::Error {
-    windows::core::Error::from_hresult(CONNECT_E_NOCONNECTION)
 }
 
 #[implement(IEnumConnectionPoints)]

@@ -11,15 +11,14 @@ use windows::Win32::System::Com::{
     IConnectionPoint, IConnectionPointContainer, IConnectionPointContainer_Impl,
     IEnumConnectionPoints,
 };
+use windows::Win32::System::Ole::CONNECT_E_NOCONNECTION;
 use windows::core::{GUID, IUnknown, Interface, implement};
 use windows_core::{BOOL, HRESULT, interface};
 
 use tracing::{debug, trace};
 
 use crate::EventDispatcher;
-use crate::connection_point::{
-    EventSinks, OMNIRIG_EVENTS_IID, OmniRigEventsConnectionPoint, connect_e_noconnection,
-};
+use crate::connection_point::{EventSinks, OMNIRIG_EVENTS_IID, OmniRigEventsConnectionPoint};
 use crate::provider::OmniRigProvider;
 use crate::rig::{IRigX, RigX};
 use auto_dispatch::auto_dispatch;
@@ -69,7 +68,7 @@ impl IConnectionPointContainer_Impl for OmniRigX_Impl {
         if unsafe { *riid } == OMNIRIG_EVENTS_IID {
             Ok(self.connection_point.clone())
         } else {
-            Err(connect_e_noconnection())
+            Err(windows::core::Error::from_hresult(CONNECT_E_NOCONNECTION))
         }
     }
 }

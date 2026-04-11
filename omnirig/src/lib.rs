@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Mutex, Weak};
 use std::thread::JoinHandle;
 use windows::Win32::System::Com::{
-    CLSCTX_LOCAL_SERVER, COINIT_MULTITHREADED, CoInitializeEx, CoRegisterClassObject,
+    CLSCTX_LOCAL_SERVER, COINIT_APARTMENTTHREADED, CoInitializeEx, CoRegisterClassObject,
     CoRevokeClassObject, CoUninitialize, IClassFactory, REGCLS_MULTIPLEUSE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -90,9 +90,18 @@ impl EventDispatcher {
 }
 
 fn process_events(dispatcher: &EventDispatcher, sink_list: &mut Vec<Weak<EventSinks>>) {
+    // Unmarshal any pending event sinks onto this (COM) thread first.
+    for weak in sink_list.iter() {
+        if let Some(s) = weak.upgrade() {
+            s.unmarshal_pending();
+        }
+    }
+
     for event in dispatcher.drain() {
         match event {
             ComEvent::RegisterSinks(sinks) => {
+                // Unmarshal any sinks that were queued before registration.
+                sinks.unmarshal_pending();
                 let before = sink_list.len();
                 sink_list.retain(|w| w.strong_count() > 0);
                 sink_list.push(Arc::downgrade(&sinks));
@@ -193,6 +202,13 @@ fn com_thread_init_and_run(
     shutdown_flag: &AtomicBool,
     barrier: &Barrier,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize COM as STA *before* any COM API calls (LoadTypeLibEx, RegisterTypeLibForUser)
+    // to avoid implicit MTA initialization that would prevent STA setup.
+    unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
+    }
+    tracing::info!(thread_id = ?std::thread::current().id(), "COM STA initialized");
+
     let exe_path = std::env::current_exe()?;
     let exe_path_str = exe_path.to_str().ok_or("Invalid executable path")?;
 
@@ -209,8 +225,6 @@ fn com_thread_init_and_run(
     let provider = Arc::new(provider);
 
     unsafe {
-        CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
-
         let factory: IClassFactory = OmniRigXFactory::new(provider, dispatcher.clone()).into();
 
         let cookie = CoRegisterClassObject(
