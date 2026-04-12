@@ -69,14 +69,14 @@ fn init_tracing(
         .max_log_files(100)
         .rotation(Rotation::DAILY)
         .filename_prefix("debug")
-        .filename_suffix(".log")
+        .filename_suffix("log")
         .build(&log_dir)
         .unwrap();
     let trace_appender = RollingFileAppender::builder()
         .max_log_files(100)
         .rotation(Rotation::DAILY)
         .filename_prefix("trace")
-        .filename_suffix(".log")
+        .filename_suffix("log")
         .build(&log_dir)
         .unwrap();
     let (debug_writer, debug_guard) = tracing_appender::non_blocking(debug_appender);
