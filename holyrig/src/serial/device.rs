@@ -1,5 +1,4 @@
 use anyhow::{Context, Result, anyhow, bail};
-use serialport::SerialPort;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -109,9 +108,6 @@ impl SerialDevice {
             ))
             .await;
             if let Ok(new_port) = Self::open_port(&self.settings.config) {
-                if let Err(err) = new_port.clear(serialport::ClearBuffer::All) {
-                    warn!(device_id = %self.id, %err, "Failed to clear serial buffers after reconnect");
-                }
                 self.port = Some(new_port);
                 info!(device_id = %self.id, port = %self.settings.config.port, "Reconnected");
                 self.message_tx.send(DeviceMessage::Reconnected).await.ok();
