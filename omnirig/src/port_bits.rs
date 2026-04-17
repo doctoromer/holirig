@@ -38,15 +38,17 @@ impl PortBits {
 impl PortBits {
     #[id(0x01)]
     fn Lock(&self) -> Result<bool, HRESULT> {
-        trace!("PortBits::Lock called");
-        Ok(self.inner.lock())
+        let value = self.inner.lock();
+        trace!(value, "PortBits::Lock called");
+        Ok(value)
     }
 
     #[id(0x02)]
     #[getter]
     fn Rts(&self) -> Result<bool, HRESULT> {
-        trace!("PortBits::Rts getter called");
-        Ok(self.inner.rts())
+        let value = self.inner.rts();
+        trace!(value, "PortBits::Rts getter called");
+        Ok(value)
     }
 
     #[id(0x02)]
@@ -60,8 +62,9 @@ impl PortBits {
     #[id(0x03)]
     #[getter]
     fn Dtr(&self) -> Result<bool, HRESULT> {
-        trace!("PortBits::Dtr getter called");
-        Ok(self.inner.dtr())
+        let value = self.inner.dtr();
+        trace!(value, "PortBits::Dtr getter called");
+        Ok(value)
     }
 
     #[id(0x03)]
@@ -75,15 +78,17 @@ impl PortBits {
     #[id(0x04)]
     #[getter]
     fn Cts(&self) -> Result<bool, HRESULT> {
-        trace!("PortBits::Cts getter called");
-        Ok(self.inner.cts())
+        let value = self.inner.cts();
+        trace!(value, "PortBits::Cts getter called");
+        Ok(value)
     }
 
     #[id(0x05)]
     #[getter]
     fn Dsr(&self) -> Result<bool, HRESULT> {
-        trace!("PortBits::Dsr getter called");
-        Ok(self.inner.dsr())
+        let value = self.inner.dsr();
+        trace!(value, "PortBits::Dsr getter called");
+        Ok(value)
     }
 
     #[id(0x06)]
