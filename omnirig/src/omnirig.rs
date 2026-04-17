@@ -64,6 +64,7 @@ impl IConnectionPointContainer_Impl for OmniRigX_Impl {
         )
     }
 
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn FindConnectionPoint(&self, riid: *const GUID) -> windows::core::Result<IConnectionPoint> {
         if unsafe { *riid } == OMNIRIG_EVENTS_IID {
             Ok(self.connection_point.clone())

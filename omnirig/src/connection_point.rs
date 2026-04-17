@@ -11,13 +11,18 @@ use windows::Win32::System::Com::Marshal::CoMarshalInterThreadInterfaceInStream;
 use windows::Win32::System::Com::StructuredStorage::CoGetInterfaceAndReleaseStream;
 use windows::Win32::System::Com::{
     DISPATCH_FLAGS, DISPPARAMS, IConnectionPoint, IConnectionPoint_Impl, IConnectionPointContainer,
-    IDispatch, IEnumConnectionPoints, IEnumConnectionPoints_Impl, IEnumConnections, IStream,
+    IDispatch, IDispatch_Impl, IDispatch_Vtbl, IEnumConnectionPoints, IEnumConnectionPoints_Impl,
+    IEnumConnections, IStream,
 };
+use windows::Win32::System::Ole::CONNECT_E_CANNOTCONNECT;
 use windows::Win32::System::Variant::VARIANT;
 use windows::core::{GUID, IUnknown, Interface, Ref, implement};
 use windows_core::HRESULT;
 
 pub const OMNIRIG_EVENTS_IID: GUID = GUID::from_u128(0x2219175F_E561_47E7_AD17_73C4D8891AA1);
+
+#[windows_core::interface("2219175F-E561-47E7-AD17-73C4D8891AA1")]
+pub unsafe trait IOmniRigXEvents: IDispatch {}
 
 const DISPATCH_METHOD: DISPATCH_FLAGS = DISPATCH_FLAGS(1);
 
@@ -30,7 +35,7 @@ unsafe impl Send for MarshaledSink {}
 
 /// Shared list of event sinks registered by COM clients via IConnectionPoint::Advise.
 pub struct EventSinks {
-    sinks: Mutex<HashMap<u32, IDispatch>>,
+    sinks: Mutex<HashMap<u32, IOmniRigXEvents>>,
     next_cookie: AtomicU32,
     pending: Mutex<Vec<MarshaledSink>>,
 }
@@ -51,7 +56,7 @@ impl EventSinks {
     pub fn unmarshal_pending(&self) {
         let pending: Vec<MarshaledSink> = std::mem::take(&mut *self.pending.lock().unwrap());
         for item in pending {
-            let result: windows::core::Result<IDispatch> =
+            let result: windows::core::Result<IOmniRigXEvents> =
                 unsafe { CoGetInterfaceAndReleaseStream(&item.stream) };
             match result {
                 Ok(disp) => {
@@ -190,12 +195,17 @@ impl IConnectionPoint_Impl for OmniRigEventsConnectionPoint_Impl {
         let unk = punk_sink.cloned().ok_or_else(|| {
             windows::core::Error::from_hresult(windows::Win32::Foundation::E_POINTER)
         })?;
-        let disp: IDispatch = unk.cast()?;
+        let event_sink: IOmniRigXEvents = unk
+            .cast()
+            .map_err(|_| windows::core::Error::from_hresult(CONNECT_E_CANNOTCONNECT))?;
         let cookie = self.sinks.next_cookie.fetch_add(1, Ordering::Relaxed);
+        let event_sink_unknown: IUnknown = event_sink.cast()?;
 
-        // Marshal the IDispatch into a stream for later unmarshaling on the COM thread.
+        // Marshal the outgoing event interface into a stream for later unmarshaling.
         // Advise may be called on an RPC worker thread, but we need to Invoke on the COM thread.
-        let stream = unsafe { CoMarshalInterThreadInterfaceInStream(&IDispatch::IID, &disp)? };
+        let stream = unsafe {
+            CoMarshalInterThreadInterfaceInStream(&IOmniRigXEvents::IID, &event_sink_unknown)?
+        };
         self.sinks
             .pending
             .lock()
@@ -251,6 +261,7 @@ impl EnumConnectionPoints {
 }
 
 impl IEnumConnectionPoints_Impl for EnumConnectionPoints_Impl {
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn Next(
         &self,
         cconnections: u32,
