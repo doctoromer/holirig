@@ -90,7 +90,17 @@ impl EventDispatcher {
 }
 
 fn process_events(dispatcher: &EventDispatcher, sink_list: &mut Vec<Weak<EventSinks>>) {
-    // Unmarshal any pending event sinks onto this (COM) thread first.
+    let before = sink_list.len();
+    sink_list.retain(|w| w.strong_count() > 0);
+    let pruned = before - sink_list.len();
+    if pruned > 0 {
+        trace!(
+            pruned,
+            active_sinks = sink_list.len(),
+            "Pruned dead event sink entries"
+        );
+    }
+
     for weak in sink_list.iter() {
         if let Some(s) = weak.upgrade() {
             s.unmarshal_pending();
@@ -100,14 +110,10 @@ fn process_events(dispatcher: &EventDispatcher, sink_list: &mut Vec<Weak<EventSi
     for event in dispatcher.drain() {
         match event {
             ComEvent::RegisterSinks(sinks) => {
-                // Unmarshal any sinks that were queued before registration.
                 sinks.unmarshal_pending();
-                let before = sink_list.len();
-                sink_list.retain(|w| w.strong_count() > 0);
                 sink_list.push(Arc::downgrade(&sinks));
                 trace!(
                     active_sinks = sink_list.len(),
-                    pruned = before - (sink_list.len() - 1),
                     "Registered new event sinks on COM thread"
                 );
             }

@@ -258,10 +258,23 @@ impl EnumConnectionPoints {
             index: Mutex::new(0),
         }
     }
+
+    unsafe fn write_connection_point(ppcp_addr: usize, index: usize, value: IConnectionPoint) {
+        let ppcp = ppcp_addr as *mut Option<IConnectionPoint>;
+        unsafe {
+            *ppcp.add(index) = Some(value);
+        }
+    }
+
+    unsafe fn write_fetched_count(pcfetched_addr: usize, value: u32) {
+        let pcfetched = pcfetched_addr as *mut u32;
+        unsafe {
+            *pcfetched = value;
+        }
+    }
 }
 
 impl IEnumConnectionPoints_Impl for EnumConnectionPoints_Impl {
-    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn Next(
         &self,
         cconnections: u32,
@@ -271,17 +284,23 @@ impl IEnumConnectionPoints_Impl for EnumConnectionPoints_Impl {
         let mut idx = self.index.lock().unwrap();
         let remaining = self.points.len().saturating_sub(*idx);
         let to_copy = (cconnections as usize).min(remaining);
+        let ppcp_addr = ppcp as usize;
+        let pcfetched_addr = pcfetched as usize;
 
         for i in 0..to_copy {
             unsafe {
-                *ppcp.add(i) = Some(self.points[*idx + i].clone());
+                EnumConnectionPoints::write_connection_point(
+                    ppcp_addr,
+                    i,
+                    self.points[*idx + i].clone(),
+                );
             }
         }
         *idx += to_copy;
 
         if !pcfetched.is_null() {
             unsafe {
-                *pcfetched = to_copy as u32;
+                EnumConnectionPoints::write_fetched_count(pcfetched_addr, to_copy as u32);
             }
         }
 

@@ -54,6 +54,11 @@ impl OmniRigX {
             connection_point: cp,
         }
     }
+
+    unsafe fn is_events_iid_addr(riid_addr: usize) -> bool {
+        let riid = riid_addr as *const GUID;
+        unsafe { *riid == OMNIRIG_EVENTS_IID }
+    }
 }
 
 impl IConnectionPointContainer_Impl for OmniRigX_Impl {
@@ -64,9 +69,9 @@ impl IConnectionPointContainer_Impl for OmniRigX_Impl {
         )
     }
 
-    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn FindConnectionPoint(&self, riid: *const GUID) -> windows::core::Result<IConnectionPoint> {
-        if unsafe { *riid } == OMNIRIG_EVENTS_IID {
+        let riid_addr = riid as usize;
+        if unsafe { OmniRigX::is_events_iid_addr(riid_addr) } {
             Ok(self.connection_point.clone())
         } else {
             Err(windows::core::Error::from_hresult(CONNECT_E_NOCONNECTION))
