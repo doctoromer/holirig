@@ -203,8 +203,9 @@ impl DeviceManager {
                 let content = toml::to_string(&self.settings)?;
                 std::fs::write(path, content)?;
 
-                let device_settings = self.settings.get_rig(device_id).unwrap().clone();
-                if let Err(err) = self.add_device(device_id, device_settings).await {
+                if let Some(device_settings) = self.settings.get_rig(device_id).cloned()
+                    && let Err(err) = self.add_device(device_id, device_settings).await
+                {
                     error!(%err, "Failed to add device");
                 }
             }
