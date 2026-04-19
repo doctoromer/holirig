@@ -29,13 +29,25 @@ const DISPATCH_METHOD: DISPATCH_FLAGS = DISPATCH_FLAGS(1);
 pub struct MarshaledSink {
     pub cookie: u32,
     pub stream: IStream,
+    pub kind: MarshaledSinkKind,
 }
 
 unsafe impl Send for MarshaledSink {}
 
+#[derive(Clone, Copy)]
+pub enum MarshaledSinkKind {
+    Dispatch,
+    Events,
+}
+
+pub enum ActiveSink {
+    Dispatch(IDispatch),
+    Events(IOmniRigXEvents),
+}
+
 /// Shared list of event sinks registered by COM clients via IConnectionPoint::Advise.
 pub struct EventSinks {
-    sinks: Mutex<HashMap<u32, IOmniRigXEvents>>,
+    sinks: Mutex<HashMap<u32, ActiveSink>>,
     next_cookie: AtomicU32,
     pending: Mutex<Vec<MarshaledSink>>,
 }
@@ -56,16 +68,26 @@ impl EventSinks {
     pub fn unmarshal_pending(&self) {
         let pending: Vec<MarshaledSink> = std::mem::take(&mut *self.pending.lock().unwrap());
         for item in pending {
-            let result: windows::core::Result<IOmniRigXEvents> =
-                unsafe { CoGetInterfaceAndReleaseStream(&item.stream) };
+            let result = match item.kind {
+                MarshaledSinkKind::Dispatch => {
+                    let disp: windows::core::Result<IDispatch> =
+                        unsafe { CoGetInterfaceAndReleaseStream(&item.stream) };
+                    disp.map(ActiveSink::Dispatch)
+                }
+                MarshaledSinkKind::Events => {
+                    let sink: windows::core::Result<IOmniRigXEvents> =
+                        unsafe { CoGetInterfaceAndReleaseStream(&item.stream) };
+                    sink.map(ActiveSink::Events)
+                }
+            };
             match result {
-                Ok(disp) => {
+                Ok(sink) => {
                     trace!(
                         cookie = item.cookie,
                         thread_id = ?std::thread::current().id(),
                         "Unmarshaled event sink on COM thread"
                     );
-                    self.sinks.lock().unwrap().insert(item.cookie, disp);
+                    self.sinks.lock().unwrap().insert(item.cookie, sink);
                 }
                 Err(err) => {
                     tracing::warn!(cookie = item.cookie, %err, "Failed to unmarshal event sink");
@@ -88,16 +110,28 @@ impl EventSinks {
         };
         for (cookie, sink) in sinks.iter() {
             let hresult = unsafe {
-                sink.Invoke(
-                    dispid,
-                    &GUID::zeroed(),
-                    0,
-                    DISPATCH_METHOD,
-                    &dispparams,
-                    None,
-                    None,
-                    None,
-                )
+                match sink {
+                    ActiveSink::Dispatch(sink) => sink.Invoke(
+                        dispid,
+                        &GUID::zeroed(),
+                        0,
+                        DISPATCH_METHOD,
+                        &dispparams,
+                        None,
+                        None,
+                        None,
+                    ),
+                    ActiveSink::Events(sink) => sink.Invoke(
+                        dispid,
+                        &GUID::zeroed(),
+                        0,
+                        DISPATCH_METHOD,
+                        &dispparams,
+                        None,
+                        None,
+                        None,
+                    ),
+                }
             };
             if let Err(err) = hresult {
                 tracing::warn!(cookie, dispid, %err, "Event Invoke failed");
@@ -131,16 +165,28 @@ impl EventSinks {
         };
         for (cookie, sink) in sinks.iter() {
             let hr = unsafe {
-                sink.Invoke(
-                    0x04,
-                    &GUID::zeroed(),
-                    0,
-                    DISPATCH_METHOD,
-                    &dispparams,
-                    None,
-                    None,
-                    None,
-                )
+                match sink {
+                    ActiveSink::Dispatch(sink) => sink.Invoke(
+                        0x04,
+                        &GUID::zeroed(),
+                        0,
+                        DISPATCH_METHOD,
+                        &dispparams,
+                        None,
+                        None,
+                        None,
+                    ),
+                    ActiveSink::Events(sink) => sink.Invoke(
+                        0x04,
+                        &GUID::zeroed(),
+                        0,
+                        DISPATCH_METHOD,
+                        &dispparams,
+                        None,
+                        None,
+                        None,
+                    ),
+                }
             };
             if let Err(err) = hr {
                 tracing::warn!(cookie, %err, "ParamsChange Invoke failed");
@@ -162,16 +208,28 @@ impl EventSinks {
         };
         for sink in sinks.values() {
             unsafe {
-                let _ = sink.Invoke(
-                    0x01,
-                    &GUID::zeroed(),
-                    0,
-                    DISPATCH_METHOD,
-                    &dispparams,
-                    None,
-                    None,
-                    None,
-                );
+                let _ = match sink {
+                    ActiveSink::Dispatch(sink) => sink.Invoke(
+                        0x01,
+                        &GUID::zeroed(),
+                        0,
+                        DISPATCH_METHOD,
+                        &dispparams,
+                        None,
+                        None,
+                        None,
+                    ),
+                    ActiveSink::Events(sink) => sink.Invoke(
+                        0x01,
+                        &GUID::zeroed(),
+                        0,
+                        DISPATCH_METHOD,
+                        &dispparams,
+                        None,
+                        None,
+                        None,
+                    ),
+                };
             }
         }
     }
@@ -199,18 +257,24 @@ impl IConnectionPoint_Impl for OmniRigEventsConnectionPoint_Impl {
             .cast()
             .map_err(|_| windows::core::Error::from_hresult(CONNECT_E_CANNOTCONNECT))?;
         let cookie = self.sinks.next_cookie.fetch_add(1, Ordering::Relaxed);
-        let event_sink_unknown: IUnknown = event_sink.cast()?;
-
-        // Marshal the outgoing event interface into a stream for later unmarshaling.
-        // Advise may be called on an RPC worker thread, but we need to Invoke on the COM thread.
-        let stream = unsafe {
-            CoMarshalInterThreadInterfaceInStream(&IOmniRigXEvents::IID, &event_sink_unknown)?
+        let (stream, kind) = if let Ok(dispatch_sink) = unk.cast::<IDispatch>() {
+            let dispatch_unknown: IUnknown = dispatch_sink.cast()?;
+            let stream = unsafe {
+                CoMarshalInterThreadInterfaceInStream(&IDispatch::IID, &dispatch_unknown)?
+            };
+            (stream, MarshaledSinkKind::Dispatch)
+        } else {
+            let event_sink_unknown: IUnknown = event_sink.cast()?;
+            let stream = unsafe {
+                CoMarshalInterThreadInterfaceInStream(&IOmniRigXEvents::IID, &event_sink_unknown)?
+            };
+            (stream, MarshaledSinkKind::Events)
         };
-        self.sinks
-            .pending
-            .lock()
-            .unwrap()
-            .push(MarshaledSink { cookie, stream });
+        self.sinks.pending.lock().unwrap().push(MarshaledSink {
+            cookie,
+            stream,
+            kind,
+        });
 
         trace!(
             cookie,

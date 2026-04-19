@@ -208,21 +208,26 @@ impl IClassFactory_Impl for OmniRigXFactory_Impl {
         unsafe {
             let requested_iid = *riid;
 
-            if requested_iid != IUnknown::IID
-                && requested_iid != IDispatch::IID
-                && requested_iid != IConnectionPointContainer::IID
-            {
-                *ppvobject = std::ptr::null_mut();
-                return Err(E_NOINTERFACE.into());
-            }
-
             debug!("OmniRigXFactory: Creating new OmniRigX instance");
             let event_sinks = EventSinks::new();
             self.dispatcher.register_sinks(Arc::clone(&event_sinks));
             let instance: IOmniRigX =
                 OmniRigX::from_provider(self.provider.as_ref(), event_sinks).into();
-            *ppvobject = std::mem::transmute_copy(&instance);
-            std::mem::forget(instance);
+
+            if requested_iid == IUnknown::IID
+                || requested_iid == IDispatch::IID
+                || requested_iid == IOmniRigX::IID
+            {
+                *ppvobject = std::mem::transmute_copy(&instance);
+                std::mem::forget(instance);
+            } else if requested_iid == IConnectionPointContainer::IID {
+                let cpc: IConnectionPointContainer = instance.cast()?;
+                *ppvobject = std::mem::transmute_copy(&cpc);
+                std::mem::forget(cpc);
+            } else {
+                *ppvobject = std::ptr::null_mut();
+                return Err(E_NOINTERFACE.into());
+            }
         }
         Ok(())
     }
