@@ -102,6 +102,38 @@ mod wayland_hide {
     }
 }
 
+pub fn show_already_running_dialog() {
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([300.0, 150.0])
+            .with_resizable(false),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "HolyRig",
+        options,
+        Box::new(|_ctx| Ok(Box::new(AlreadyRunningApp))),
+    )
+    .expect("Failed to run already running dialog");
+}
+
+struct AlreadyRunningApp;
+
+impl eframe::App for AlreadyRunningApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(20.0);
+                ui.heading("HolyRig is already running");
+                ui.add_space(20.0);
+                if ui.button("OK").clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
+        });
+    }
+}
+
 pub enum TrayAction {
     Show,
     Quit,

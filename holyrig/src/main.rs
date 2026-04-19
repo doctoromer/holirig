@@ -259,6 +259,7 @@ async fn main() -> Result<()> {
                 run_holyrig().await
             } else {
                 info!("Already running, exiting...");
+                gui::show_already_running_dialog();
                 Ok(())
             }
         }
