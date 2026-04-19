@@ -5,6 +5,7 @@ use argh::FromArgs;
 use eframe::egui;
 use holyrig::interfaces::jsonrpc::JsonRpcServer;
 use holyrig::resources::{ResourceError, Resources};
+use single_instance::SingleInstance;
 use tracing::{error, info};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, Registry, prelude::*};
@@ -120,18 +121,7 @@ fn init_tracing(
     (debug_guard, trace_guard)
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let cli: Cli = argh::from_env();
-
-    let _guards = init_tracing(cli.verbose);
-
-    match cli.command {
-        Some(SubCommand::Console(cmd)) => return holyrig_console::run(cmd.addr).await,
-        Some(SubCommand::Radio(cmd)) => return holyrig_radio::run(cmd.addr).await,
-        None => {}
-    }
-
+async fn run_holyrig() -> Result<()> {
     let resources = match Resources::load() {
         Ok(resources) => resources,
         Err(err) => {
@@ -252,4 +242,25 @@ async fn main() -> Result<()> {
     .unwrap();
 
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli: Cli = argh::from_env();
+
+    let _guards = init_tracing(cli.verbose);
+
+    match cli.command {
+        Some(SubCommand::Console(cmd)) => holyrig_console::run(cmd.addr).await,
+        Some(SubCommand::Radio(cmd)) => holyrig_radio::run(cmd.addr).await,
+        None => {
+            let instance = SingleInstance::new("holyrig")?;
+            if instance.is_single() {
+                run_holyrig().await
+            } else {
+                info!("Already running, exiting...");
+                Ok(())
+            }
+        }
+    }
 }
